@@ -12,14 +12,14 @@ final class RedminePayloadMapper
     /**
      * @return array<string, mixed>
      */
-    public function issuePayload(TicketDTO $ticket, RedmineConfig $config): array
+    public function issuePayload(TicketDTO $ticket, int $projectId, int $trackerId, array $customFieldMap): array
     {
-        $customFields = $this->buildCustomFields($ticket, $config);
+        $customFields = $this->buildCustomFields($ticket, $customFieldMap);
 
         return [
             'issue' => array_filter([
-                'project_id' => $config->projectId,
-                'tracker_id' => $config->trackerId,
+                'project_id' => $projectId,
+                'tracker_id' => $trackerId,
                 'subject' => $ticket->subject,
                 'description' => $ticket->description,
                 'priority_id' => $this->mapPriority($ticket->prioridad),
@@ -45,10 +45,14 @@ final class RedminePayloadMapper
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function buildCustomFields(TicketDTO $ticket, RedmineConfig $config): array
+    /**
+     * @param array<string, int|string> $customFieldMap
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildCustomFields(TicketDTO $ticket, array $customFieldMap): array
     {
         $fields = [];
-        $map = $config->customFieldMap;
+        $map = $customFieldMap;
 
         $this->pushCustomField($fields, $map['origen'] ?? null, $ticket->customFields['origen'] ?? null);
         $this->pushCustomField($fields, $map['external_ticket_id'] ?? null, $ticket->externalTicketId);

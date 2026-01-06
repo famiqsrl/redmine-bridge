@@ -8,7 +8,6 @@ final class CrearTicketResult
 {
     public function __construct(
         public int $issueId,
-        public bool $idempotencyHit,
     ) {
     }
 }

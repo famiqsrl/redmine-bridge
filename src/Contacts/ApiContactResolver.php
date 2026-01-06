@@ -9,7 +9,6 @@ use Famiq\RedmineBridge\DTO\ClienteDTO;
 use Famiq\RedmineBridge\DTO\UpsertClienteResult;
 use Famiq\RedmineBridge\Exceptions\RedmineTransportException;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
-use Famiq\RedmineBridge\RedmineConfig;
 use Famiq\RedmineBridge\RequestContext;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -18,18 +17,19 @@ final class ApiContactResolver implements ContactResolverInterface
 {
     public function __construct(
         private RedmineHttpClient $client,
-        private RedmineConfig $config,
+        private ?string $searchPath,
+        private ?string $upsertPath,
         private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 
     public function buscar(ClienteDTO $criteria, RequestContext $context): BuscarClienteResult
     {
-        if ($this->config->contactsSearchPath === null) {
+        if ($this->searchPath === null) {
             throw new RedmineTransportException('Contacts API search path not configured');
         }
 
-        $path = $this->config->contactsSearchPath . '?' . http_build_query([
+        $path = $this->searchPath . '?' . http_build_query([
             'q' => $criteria->externalId ?? $criteria->razonSocial ?? $criteria->nombre ?? '',
         ]);
 
@@ -58,7 +58,7 @@ final class ApiContactResolver implements ContactResolverInterface
 
     public function upsert(ClienteDTO $cliente, RequestContext $context): UpsertClienteResult
     {
-        if ($this->config->contactsUpsertPath === null) {
+        if ($this->upsertPath === null) {
             throw new RedmineTransportException('Contacts API upsert path not configured');
         }
 
@@ -76,7 +76,7 @@ final class ApiContactResolver implements ContactResolverInterface
             ],
         ];
 
-        $response = $this->client->request('POST', $this->config->contactsUpsertPath, $payload, [], $context);
+        $response = $this->client->request('POST', $this->upsertPath, $payload, [], $context);
         $contactId = (string) ($response['contact']['id'] ?? '');
 
         $this->logger->info('redmine.contact.upserted', [

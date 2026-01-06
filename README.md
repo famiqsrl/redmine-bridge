@@ -29,7 +29,6 @@ use Famiq\RedmineBridge\DTO\ClienteDTO;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
-use Famiq\RedmineBridge\Idempotency\InMemoryIdempotencyStore;
 use Famiq\RedmineBridge\RedmineClienteService;
 use Famiq\RedmineBridge\RedmineConfig;
 use Famiq\RedmineBridge\RedminePayloadMapper;
@@ -39,26 +38,23 @@ use Psr\Log\NullLogger;
 
 $config = new RedmineConfig(
     'https://redmine.example.com',
-    'api-key',
-    1,
-    2,
+    'usuario',
+    'contraseña',
     ['external_ticket_id' => 11],
-    'https://redmine.example.com',
-    '/contacts/search.json',
-    '/contacts.json',
-    'api',
 );
 
 $http = new RedmineHttpClient($psr18Client, $config, new NullLogger());
 $mapper = new RedminePayloadMapper();
-$idempotency = new InMemoryIdempotencyStore();
-$ticketService = new RedmineTicketService($http, $config, $mapper, $idempotency, new NullLogger());
-$clienteService = new RedmineClienteService(new ApiContactResolver($http, $config, new NullLogger()), new NullLogger());
+$ticketService = new RedmineTicketService($http, $config, $mapper, new NullLogger());
+$clienteService = new RedmineClienteService(
+    new ApiContactResolver($http, '/contacts/search.json', '/contacts.json', new NullLogger()),
+    new NullLogger()
+);
 
 $ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
 $context = RequestContext::generate();
 
-$result = $ticketService->crearTicket($ticket, 'idempotency-123', $context);
+$result = $ticketService->crearTicket($ticket, 1, 2, $context);
 
 $cliente = new ClienteDTO('empresa', 'ACME', null, null, '30-12345678-9', [], [], null, 'EXT-1', 'crm');
 $clienteService->upsertCliente($cliente, $context);
@@ -67,7 +63,7 @@ $mensaje = new MensajeDTO($result->issueId, 'Seguimiento interno', 'internal', n
 $ticketService->crearMensaje($mensaje, $context);
 
 $adjunto = new AdjuntoDTO($result->issueId, 'archivo.txt', 'text/plain', 'contenido', null, null);
-$ticketService->crearAdjunto($adjunto, 'adj-123', $context);
+$ticketService->crearAdjunto($adjunto, $context);
 ```
 
 ## Laravel y Symfony

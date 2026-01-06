@@ -37,7 +37,7 @@ final class RedmineHttpClient
     {
         $url = rtrim($this->config->baseUrl, '/') . '/' . ltrim($path, '/');
         $request = $this->factory->createRequest($method, $url)
-            ->withHeader('X-Redmine-API-Key', $this->config->apiKey)
+            ->withHeader('Authorization', $this->buildAuthHeader())
             ->withHeader('Accept', 'application/json');
 
         if ($context !== null) {
@@ -76,6 +76,13 @@ final class RedmineHttpClient
         }
 
         return $this->handleResponse($response, $context);
+    }
+
+    private function buildAuthHeader(): string
+    {
+        $token = base64_encode($this->config->username . ':' . $this->config->password);
+
+        return 'Basic ' . $token;
     }
 
     /**

@@ -10,20 +10,20 @@
 
 ## Áreas a modificar
 1. **Nuevo paquete** `packages/famiq/redmine-bridge`:
-   - `composer.json`, `src/` (DTOs, servicios por módulo y cliente HTTP Redmine), `tests/`, `docs/`, `config/`, `database/migrations/`.
+   - `composer.json` y `src/` mínimo (DTOs, servicios y cliente HTTP Redmine).
 2. **Paquete existente** `famiq/ad-user`:
    - Extender `FamiqADUserServiceProvider.php` para publicar configuración de Redmine y registrar rutas si la feature flag está activa.
    - Agregar `redmine_bridge.php` como config publicable.
    - Agregar capa `RedmineBridgeFacade` + controladores + requests para endpoints nuevos.
    - Mantener comandos y API existentes intactos.
 3. **Documentación** en `/docs`:
-   - `README.md` (instalación y ejemplos Laravel/Symfony).
+   - `README.md` (instalación y ejemplos de uso directo).
    - `INTEGRATION_API.md` (endpoints y payloads).
    - `MAPPING.md` (mapeos y custom fields).
 
 ## Decisiones clave
 - DTOs y servicios directos (sin capa de commands/queries ni contratos separados).
-- Idempotencia con tabla `integration_idempotency` (Laravel migration + SQL para Symfony).
+- Idempotencia a través de store en memoria (la app puede implementar su propio store si necesita persistencia).
 - Observabilidad con `LoggerInterface` (PSR-3) y `RequestContext` (correlation_id).
 - Contactos/CRM con estrategia configurable (API / custom field / fallback).
 - Feature flag `REDMINE_BRIDGE_ENABLED` para activar endpoints en el plugin existente.

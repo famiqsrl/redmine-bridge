@@ -1,14 +1,8 @@
-# Redmine Bridge (Laravel + Symfony)
+# Redmine Bridge (mínimo)
 
 ## Instalación (Composer)
 
-En aplicaciones Laravel/Symfony:
-
-```bash
-composer require famiq/redmine-bridge
-```
-
-Para un monorepo, agregar repositorio de tipo path:
+Instalar el paquete:
 
 ```json
 {
@@ -18,81 +12,42 @@ Para un monorepo, agregar repositorio de tipo path:
 }
 ```
 
-## Configuración (.env Laravel)
+## Configuración mínima
 
-```env
-REDMINE_BRIDGE_ENABLED=true
-REDMINE_BASE_URL=https://redmine.example.com
-REDMINE_API_KEY=xxx
-REDMINE_PROJECT_ID=1
-REDMINE_TRACKER_ID=2
-REDMINE_CF_ORIGEN=10
-REDMINE_CF_EXTERNAL_TICKET_ID=11
-REDMINE_CF_CANAL=12
-REDMINE_CF_CONTACT_REF=13
-REDMINE_CONTACT_STRATEGY=fallback
-```
+Configurar a mano los parámetros de Redmine (base URL, API key, ids de proyecto/tracker y campos custom).
 
-Publicar config/migrations:
-
-```bash
-php artisan vendor:publish --tag=redmine-bridge-config
-php artisan migrate
-```
-
-## Configuración (Symfony services.yaml)
-
-```yaml
-redmine_bridge:
-  base_url: 'https://redmine.example.com'
-  api_key: '%env(REDMINE_API_KEY)%'
-  project_id: 1
-  tracker_id: 2
-  custom_fields:
-    origen: 10
-    external_ticket_id: 11
-    canal: 12
-    contact_ref: 13
-  contact_strategy: 'fallback'
-```
-
-Registrar bundle:
+## Ejemplo de uso directo
 
 ```php
-// config/bundles.php
-return [
-    Famiq\RedmineBridge\Symfony\RedmineBridgeBundle::class => ['all' => true],
-];
-```
-
-Comando de verificación:
-
-```bash
-php bin/console redmine:bridge:check
-```
-
-## Ejemplo Laravel (uso directo)
-
-```php
+use Famiq\RedmineBridge\Contacts\ApiContactResolver;
 use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\Http\RedmineHttpClient;
+use Famiq\RedmineBridge\Idempotency\InMemoryIdempotencyStore;
+use Famiq\RedmineBridge\RedmineClienteService;
+use Famiq\RedmineBridge\RedmineConfig;
+use Famiq\RedmineBridge\RedminePayloadMapper;
 use Famiq\RedmineBridge\RedmineTicketService;
 use Famiq\RedmineBridge\RequestContext;
+use Psr\Log\NullLogger;
 
-$ticketService = app(RedmineTicketService::class);
-$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
-$context = RequestContext::generate();
+$config = new RedmineConfig(
+    'https://redmine.example.com',
+    'api-key',
+    1,
+    2,
+    ['external_ticket_id' => 11],
+    'https://redmine.example.com',
+    '/contacts/search.json',
+    '/contacts.json',
+    'api',
+);
 
-$result = $ticketService->crearTicket($ticket, 'idempotency-123', $context);
-```
+$http = new RedmineHttpClient($psr18Client, $config, new NullLogger());
+$mapper = new RedminePayloadMapper();
+$idempotency = new InMemoryIdempotencyStore();
+$ticketService = new RedmineTicketService($http, $config, $mapper, $idempotency, new NullLogger());
+$clienteService = new RedmineClienteService(new ApiContactResolver($http, $config, new NullLogger()), new NullLogger());
 
-## Ejemplo Symfony (uso directo)
-
-```php
-use Famiq\RedmineBridge\DTO\TicketDTO;
-use Famiq\RedmineBridge\RedmineTicketService;
-use Famiq\RedmineBridge\RequestContext;
-
-$ticketService = $container->get(RedmineTicketService::class);
 $ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
 $context = RequestContext::generate();
 

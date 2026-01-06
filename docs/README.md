@@ -61,7 +61,7 @@ Registrar bundle:
 ```php
 // config/bundles.php
 return [
-    Famiq\RedmineBridge\Infrastructure\Symfony\RedmineBridgeBundle::class => ['all' => true],
+    Famiq\RedmineBridge\Symfony\RedmineBridgeBundle::class => ['all' => true],
 ];
 ```
 
@@ -74,35 +74,27 @@ php bin/console redmine:bridge:check
 ## Ejemplo Laravel (uso directo)
 
 ```php
-use Famiq\RedmineBridge\Contracts\Commands\CrearTicketCommand;
-use Famiq\RedmineBridge\Contracts\Context\RequestContext;
-use Famiq\RedmineBridge\Contracts\DTO\TicketDTO;
-use Famiq\RedmineBridge\Contracts\Interfaces\TicketServiceInterface;
+use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\RedmineTicketService;
+use Famiq\RedmineBridge\RequestContext;
 
-$ticketService = app(TicketServiceInterface::class);
-$command = new CrearTicketCommand(
-    new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []),
-    'idempotency-123',
-    RequestContext::generate(),
-);
+$ticketService = app(RedmineTicketService::class);
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
+$context = RequestContext::generate();
 
-$result = $ticketService->crearTicket($command);
+$result = $ticketService->crearTicket($ticket, 'idempotency-123', $context);
 ```
 
 ## Ejemplo Symfony (uso directo)
 
 ```php
-use Famiq\RedmineBridge\Contracts\Commands\CrearTicketCommand;
-use Famiq\RedmineBridge\Contracts\Context\RequestContext;
-use Famiq\RedmineBridge\Contracts\DTO\TicketDTO;
-use Famiq\RedmineBridge\Contracts\Interfaces\TicketServiceInterface;
+use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\RedmineTicketService;
+use Famiq\RedmineBridge\RequestContext;
 
-$ticketService = $container->get(TicketServiceInterface::class);
-$command = new CrearTicketCommand(
-    new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []),
-    'idempotency-123',
-    RequestContext::generate(),
-);
+$ticketService = $container->get(RedmineTicketService::class);
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
+$context = RequestContext::generate();
 
-$result = $ticketService->crearTicket($command);
+$result = $ticketService->crearTicket($ticket, 'idempotency-123', $context);
 ```

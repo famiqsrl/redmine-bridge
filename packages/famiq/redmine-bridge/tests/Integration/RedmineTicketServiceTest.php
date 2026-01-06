@@ -4,14 +4,13 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\Tests\Integration;
 
-use Famiq\RedmineBridge\Contracts\Commands\CrearTicketCommand;
-use Famiq\RedmineBridge\Contracts\Context\RequestContext;
-use Famiq\RedmineBridge\Contracts\DTO\TicketDTO;
-use Famiq\RedmineBridge\Infrastructure\Idempotency\InMemoryIdempotencyStore;
-use Famiq\RedmineBridge\Infrastructure\Redmine\RedmineConfig;
-use Famiq\RedmineBridge\Infrastructure\Redmine\RedmineHttpClient;
-use Famiq\RedmineBridge\Infrastructure\Redmine\RedminePayloadMapper;
-use Famiq\RedmineBridge\Infrastructure\Redmine\RedmineTicketService;
+use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\Http\RedmineHttpClient;
+use Famiq\RedmineBridge\Idempotency\InMemoryIdempotencyStore;
+use Famiq\RedmineBridge\RedmineConfig;
+use Famiq\RedmineBridge\RedminePayloadMapper;
+use Famiq\RedmineBridge\RedmineTicketService;
+use Famiq\RedmineBridge\RequestContext;
 use Http\Mock\Client as MockClient;
 use Nyholm\Psr7\Response;
 use PHPUnit\Framework\TestCase;
@@ -44,17 +43,14 @@ final class RedmineTicketServiceTest extends TestCase
             new NullLogger(),
         );
 
-        $command = new CrearTicketCommand(
-            new TicketDTO('Subject', 'Body', 'media', null, null, null, null, []),
-            'idempotency-1',
-            RequestContext::generate(),
-        );
+        $ticket = new TicketDTO('Subject', 'Body', 'media', null, null, null, null, []);
+        $context = RequestContext::generate();
 
-        $result = $service->crearTicket($command);
+        $result = $service->crearTicket($ticket, 'idempotency-1', $context);
         $this->assertSame(55, $result->issueId);
         $this->assertFalse($result->idempotencyHit);
 
-        $repeat = $service->crearTicket($command);
+        $repeat = $service->crearTicket($ticket, 'idempotency-1', $context);
         $this->assertTrue($repeat->idempotencyHit);
     }
 }

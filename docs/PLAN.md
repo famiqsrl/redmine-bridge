@@ -10,7 +10,7 @@
 
 ## Áreas a modificar
 1. **Nuevo paquete** `packages/famiq/redmine-bridge`:
-   - `composer.json`, `src/` (DTOs, contratos, adaptadores Redmine), `tests/`, `docs/`, `config/`, `database/migrations/`.
+   - `composer.json`, `src/` (DTOs, servicios por módulo y cliente HTTP Redmine), `tests/`, `docs/`, `config/`, `database/migrations/`.
 2. **Paquete existente** `famiq/ad-user`:
    - Extender `FamiqADUserServiceProvider.php` para publicar configuración de Redmine y registrar rutas si la feature flag está activa.
    - Agregar `redmine_bridge.php` como config publicable.
@@ -22,7 +22,7 @@
    - `MAPPING.md` (mapeos y custom fields).
 
 ## Decisiones clave
-- Contratos estables en `packages/famiq/redmine-bridge/src/Contracts`.
+- DTOs y servicios directos (sin capa de commands/queries ni contratos separados).
 - Idempotencia con tabla `integration_idempotency` (Laravel migration + SQL para Symfony).
 - Observabilidad con `LoggerInterface` (PSR-3) y `RequestContext` (correlation_id).
 - Contactos/CRM con estrategia configurable (API / custom field / fallback).

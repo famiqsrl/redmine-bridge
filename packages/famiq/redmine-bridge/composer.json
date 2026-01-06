@@ -28,7 +28,7 @@
     "extra": {
         "laravel": {
             "providers": [
-                "Famiq\\RedmineBridge\\Infrastructure\\Laravel\\RedmineBridgeServiceProvider"
+                "Famiq\\RedmineBridge\\Laravel\\RedmineBridgeServiceProvider"
             ]
         }
     },

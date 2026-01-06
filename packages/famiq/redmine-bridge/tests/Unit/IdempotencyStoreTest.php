@@ -4,8 +4,8 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\Tests\Unit;
 
-use Famiq\RedmineBridge\Contracts\DTO\IdempotencyRecord;
-use Famiq\RedmineBridge\Infrastructure\Idempotency\InMemoryIdempotencyStore;
+use Famiq\RedmineBridge\DTO\IdempotencyRecord;
+use Famiq\RedmineBridge\Idempotency\InMemoryIdempotencyStore;
 use PHPUnit\Framework\TestCase;
 
 final class IdempotencyStoreTest extends TestCase

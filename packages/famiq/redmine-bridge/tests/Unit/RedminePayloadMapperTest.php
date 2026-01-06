@@ -4,9 +4,9 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\Tests\Unit;
 
-use Famiq\RedmineBridge\Contracts\DTO\TicketDTO;
-use Famiq\RedmineBridge\Infrastructure\Redmine\RedmineConfig;
-use Famiq\RedmineBridge\Infrastructure\Redmine\RedminePayloadMapper;
+use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\RedmineConfig;
+use Famiq\RedmineBridge\RedminePayloadMapper;
 use PHPUnit\Framework\TestCase;
 
 final class RedminePayloadMapperTest extends TestCase

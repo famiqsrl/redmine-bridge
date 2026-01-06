@@ -4,6 +4,8 @@ declare(strict_types=1);
 namespace Famiq\ActiveDirectoryUser;
 
 use Famiq\ActiveDirectoryUser\RedmineBridge\RedmineBridgeFacade;
+use Famiq\RedmineBridge\RedmineClienteService;
+use Famiq\RedmineBridge\RedmineTicketService;
 use Illuminate\Support\ServiceProvider;
 
 /**
@@ -18,11 +20,11 @@ class FamiqADUserServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/redmine_bridge.php', 'redmine_bridge');
 
-        if (class_exists(\Famiq\RedmineBridge\Contracts\Interfaces\ClienteServiceInterface::class)) {
+        if (class_exists(RedmineClienteService::class)) {
             $this->app->singleton(RedmineBridgeFacade::class, function ($app) {
                 return new RedmineBridgeFacade(
-                    $app->make(\Famiq\RedmineBridge\Contracts\Interfaces\ClienteServiceInterface::class),
-                    $app->make(\Famiq\RedmineBridge\Contracts\Interfaces\TicketServiceInterface::class),
+                    $app->make(RedmineClienteService::class),
+                    $app->make(RedmineTicketService::class),
                 );
             });
         }

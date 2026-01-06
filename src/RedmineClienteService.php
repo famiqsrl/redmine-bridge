@@ -14,8 +14,8 @@ use Psr\Log\NullLogger;
 final class RedmineClienteService
 {
     public function __construct(
-        private readonly ContactResolverInterface $resolver,
-        private readonly LoggerInterface $logger = new NullLogger(),
+        private ContactResolverInterface $resolver,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 

@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\DTO;
 
-final readonly class AdjuntoDTO
+final class AdjuntoDTO
 {
     public function __construct(
         public int $issueId,

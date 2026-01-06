@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge;
 
-final readonly class RedmineConfig
+final class RedmineConfig
 {
     /**
      * @param array<string, int|string> $customFieldMap

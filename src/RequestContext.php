@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge;
 
-final readonly class RequestContext
+final class RequestContext
 {
     public function __construct(
         public string $correlationId,

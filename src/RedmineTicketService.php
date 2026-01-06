@@ -21,11 +21,11 @@ use Psr\Log\NullLogger;
 final class RedmineTicketService
 {
     public function __construct(
-        private readonly RedmineHttpClient $client,
-        private readonly RedmineConfig $config,
-        private readonly RedminePayloadMapper $mapper,
-        private readonly IdempotencyStoreInterface $idempotencyStore,
-        private readonly LoggerInterface $logger = new NullLogger(),
+        private RedmineHttpClient $client,
+        private RedmineConfig $config,
+        private RedminePayloadMapper $mapper,
+        private IdempotencyStoreInterface $idempotencyStore,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 

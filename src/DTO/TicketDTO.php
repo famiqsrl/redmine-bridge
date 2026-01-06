@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\DTO;
 
-final readonly class TicketDTO
+final class TicketDTO
 {
     /**
      * @param array<string, mixed> $customFields

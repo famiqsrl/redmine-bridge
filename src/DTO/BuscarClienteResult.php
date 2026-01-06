@@ -6,7 +6,7 @@ namespace Famiq\RedmineBridge\DTO;
 
 use Famiq\RedmineBridge\DTO\ClienteDTO;
 
-final readonly class BuscarClienteResult
+final class BuscarClienteResult
 {
     /**
      * @param ClienteDTO[] $items

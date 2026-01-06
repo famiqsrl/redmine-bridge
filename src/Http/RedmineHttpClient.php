@@ -21,9 +21,9 @@ final class RedmineHttpClient
     private Psr17Factory $factory;
 
     public function __construct(
-        private readonly ClientInterface $client,
-        private readonly RedmineConfig $config,
-        private readonly LoggerInterface $logger = new NullLogger(),
+        private ClientInterface $client,
+        private RedmineConfig $config,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
         $this->factory = new Psr17Factory();
     }

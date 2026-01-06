@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\DTO;
 
-final readonly class CrearMensajeResult
+final class CrearMensajeResult
 {
     public function __construct(
         public ?int $journalId,

@@ -17,9 +17,9 @@ use Psr\Log\NullLogger;
 final class ApiContactResolver implements ContactResolverInterface
 {
     public function __construct(
-        private readonly RedmineHttpClient $client,
-        private readonly RedmineConfig $config,
-        private readonly LoggerInterface $logger = new NullLogger(),
+        private RedmineHttpClient $client,
+        private RedmineConfig $config,
+        private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 

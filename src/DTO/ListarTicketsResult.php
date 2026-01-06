@@ -4,7 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge\DTO;
 
-final readonly class ListarTicketsResult
+final class ListarTicketsResult
 {
     /**
      * @param array<int, array<string, mixed>> $items

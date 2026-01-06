@@ -12,6 +12,7 @@ final class TicketDTO
     public function __construct(
         public string $subject,
         public string $description,
+        public int $trackerId,
         public string $prioridad,
         public ?string $categoria,
         public ?string $canal,

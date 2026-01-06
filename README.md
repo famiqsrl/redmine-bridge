@@ -41,6 +41,7 @@ $config = new RedmineConfig(
     'usuario',
     'contraseña',
     ['external_ticket_id' => 11],
+    [],
 );
 
 $http = new RedmineHttpClient($psr18Client, $config, new NullLogger());
@@ -51,10 +52,10 @@ $clienteService = new RedmineClienteService(
     new NullLogger()
 );
 
-$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
+$ticket = new TicketDTO('Asunto', 'Detalle', 2, 'media', null, 'email', 'EXT-123', 'C-1', []);
 $context = RequestContext::generate();
 
-$result = $ticketService->crearTicket($ticket, 1, 2, $context);
+$result = $ticketService->crearTicket($ticket, 1, $context);
 
 $cliente = new ClienteDTO('empresa', 'ACME', null, null, '30-12345678-9', [], [], null, 'EXT-1', 'crm');
 $clienteService->upsertCliente($cliente, $context);

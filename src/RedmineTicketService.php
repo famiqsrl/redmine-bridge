@@ -26,9 +26,14 @@ final class RedmineTicketService
     ) {
     }
 
-    public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
+    public function crearTicket(TicketDTO $ticket, int $projectId, RequestContext $context): CrearTicketResult
     {
-        $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $this->config->customFieldMap);
+        $payload = $this->mapper->issuePayload(
+            $ticket,
+            $projectId,
+            $this->config->customFieldMap,
+            $this->config->requiredCustomFieldOptionsByTracker,
+        );
         $response = $this->client->request('POST', '/issues.json', $payload, [], $context);
 
         $issueId = (int) ($response['issue']['id'] ?? 0);

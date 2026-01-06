@@ -22,7 +22,7 @@ final class RedminePayloadMapper
                 'tracker_id' => $trackerId,
                 'subject' => $ticket->subject,
                 'description' => $ticket->description,
-                'priority_id' => $this->mapPriority($ticket->prioridad),
+                'priority_id' => $ticket->prioridad,
                 'category_id' => $ticket->categoria,
                 'custom_fields' => $customFields,
             ], static fn ($value) => $value !== null && $value !== []),
@@ -83,13 +83,4 @@ final class RedminePayloadMapper
         ];
     }
 
-    private function mapPriority(string $prioridad): int
-    {
-        return match ($prioridad) {
-            'alta' => 5,
-            'media' => 4,
-            'baja' => 3,
-            default => 4,
-        };
-    }
 }

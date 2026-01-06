@@ -14,6 +14,7 @@ final class RedmineConfig
         public string $username,
         public string $password,
         public array $customFieldMap,
+        public bool $useSsl = true,
     ) {
     }
 }

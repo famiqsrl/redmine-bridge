@@ -35,7 +35,7 @@ final class RedmineHttpClient
      */
     public function request(string $method, string $path, array|string|null $body, array $headers, ?RequestContext $context): array
     {
-        $url = rtrim($this->config->baseUrl, '/') . '/' . ltrim($path, '/');
+        $url = $this->buildUrl($path);
         $request = $this->factory->createRequest($method, $url)
             ->withHeader('Authorization', $this->buildAuthHeader())
             ->withHeader('Accept', 'application/json');
@@ -76,6 +76,17 @@ final class RedmineHttpClient
         }
 
         return $this->handleResponse($response, $context);
+    }
+
+    private function buildUrl(string $path): string
+    {
+        $baseUrl = rtrim($this->config->baseUrl, '/');
+
+        if (!$this->config->useSsl && str_starts_with($baseUrl, 'https://')) {
+            $baseUrl = 'http://' . substr($baseUrl, 8);
+        }
+
+        return $baseUrl . '/' . ltrim($path, '/');
     }
 
     private function buildAuthHeader(): string

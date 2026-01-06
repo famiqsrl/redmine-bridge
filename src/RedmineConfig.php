@@ -11,14 +11,9 @@ final class RedmineConfig
      */
     public function __construct(
         public string $baseUrl,
-        public string $apiKey,
-        public int $projectId,
-        public int $trackerId,
+        public string $username,
+        public string $password,
         public array $customFieldMap,
-        public ?string $contactsApiBase,
-        public ?string $contactsSearchPath,
-        public ?string $contactsUpsertPath,
-        public string $contactStrategy,
     ) {
     }
 }

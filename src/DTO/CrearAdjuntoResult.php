@@ -8,7 +8,6 @@ final class CrearAdjuntoResult
 {
     public function __construct(
         public ?string $attachmentId,
-        public bool $idempotencyHit,
     ) {
     }
 }

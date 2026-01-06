@@ -8,13 +8,11 @@ use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
-use Famiq\RedmineBridge\DTO\IdempotencyRecord;
 use Famiq\RedmineBridge\DTO\ListarTicketsResult;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\Exceptions\RedmineTransportException;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
-use Famiq\RedmineBridge\Idempotency\IdempotencyStoreInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -24,33 +22,17 @@ final class RedmineTicketService
         private RedmineHttpClient $client,
         private RedmineConfig $config,
         private RedminePayloadMapper $mapper,
-        private IdempotencyStoreInterface $idempotencyStore,
         private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 
-    public function crearTicket(TicketDTO $ticket, string $idempotencyKey, RequestContext $context): CrearTicketResult
+    public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
     {
-        $existing = $this->idempotencyStore->find('crear_ticket', $idempotencyKey);
-        if ($existing !== null) {
-            $payload = json_decode($existing->responsePayload, true);
-            return new CrearTicketResult((int) ($payload['issue_id'] ?? 0), true);
-        }
-
-        $payload = $this->mapper->issuePayload($ticket, $this->config);
+        $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $this->config->customFieldMap);
         $response = $this->client->request('POST', '/issues.json', $payload, [], $context);
 
         $issueId = (int) ($response['issue']['id'] ?? 0);
-        $record = new IdempotencyRecord(
-            'crear_ticket',
-            $idempotencyKey,
-            hash('sha256', json_encode($payload, JSON_THROW_ON_ERROR)),
-            json_encode(['issue_id' => $issueId], JSON_THROW_ON_ERROR),
-            date('c'),
-        );
-        $this->idempotencyStore->save($record);
-
-        return new CrearTicketResult($issueId, false);
+        return new CrearTicketResult($issueId);
     }
 
     public function listarTickets(?string $status, ?int $page, ?int $perPage, ?string $clienteRef, RequestContext $context): ListarTicketsResult
@@ -84,14 +66,8 @@ final class RedmineTicketService
         return new CrearMensajeResult(null);
     }
 
-    public function crearAdjunto(AdjuntoDTO $adjunto, string $idempotencyKey, RequestContext $context): CrearAdjuntoResult
+    public function crearAdjunto(AdjuntoDTO $adjunto, RequestContext $context): CrearAdjuntoResult
     {
-        $existing = $this->idempotencyStore->find('crear_adjunto', $idempotencyKey);
-        if ($existing !== null) {
-            $payload = json_decode($existing->responsePayload, true);
-            return new CrearAdjuntoResult($payload['attachment_id'] ?? null, true);
-        }
-
         $content = $this->resolveContent($adjunto->content);
         $token = $this->uploadContent($content, $adjunto->filename, $context);
 
@@ -109,16 +85,7 @@ final class RedmineTicketService
 
         $this->client->request('PUT', sprintf('/issues/%d.json', $adjunto->issueId), $payload, [], $context);
 
-        $record = new IdempotencyRecord(
-            'crear_adjunto',
-            $idempotencyKey,
-            $adjunto->sha256 ?? hash('sha256', $content),
-            json_encode(['attachment_id' => null], JSON_THROW_ON_ERROR),
-            date('c'),
-        );
-        $this->idempotencyStore->save($record);
-
-        return new CrearAdjuntoResult(null, false);
+        return new CrearAdjuntoResult(null);
     }
 
     private function resolveContent(string $content): string

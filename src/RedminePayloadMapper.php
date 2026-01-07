@@ -24,7 +24,6 @@ final class RedminePayloadMapper
                 'description' => $ticket->description,
                 'priority_id' => $ticket->prioridad,
                 'category_id' => $ticket->categoria,
-                'assigned_to_id' => $ticket->assignedToId,
                 'custom_fields' => $customFields,
             ], static fn ($value) => $value !== null && $value !== []),
         ];

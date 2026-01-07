@@ -51,7 +51,7 @@ $clienteService = new RedmineClienteService(
     new NullLogger()
 );
 
-$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', 12, []);
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
 $context = RequestContext::generate();
 
 $result = $ticketService->crearTicket($ticket, 1, 2, $context);

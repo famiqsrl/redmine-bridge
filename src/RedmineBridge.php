@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge;
 
+use Famiq\RedmineBridge\Contacts\ApiContactResolver;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\BuscarClienteResult;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
@@ -15,13 +16,34 @@ use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\ObtenerTicketResult;
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\DTO\UpsertClienteResult;
+use Famiq\RedmineBridge\Http\RedmineHttpClient;
+use Psr\Http\Client\ClientInterface;
+use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 final class RedmineBridge
 {
+    private RedmineTicketService $ticketService;
+    private RedmineClienteService $clienteService;
+
     public function __construct(
-        private RedmineTicketService $ticketService,
-        private RedmineClienteService $clienteService,
+        RedmineConfig $config,
+        ClientInterface $client,
+        ?LoggerInterface $logger = null,
+        ?string $contactSearchPath = '/contacts/search.json',
+        ?string $contactUpsertPath = '/contacts.json',
     ) {
+        $logger = $logger ?? new NullLogger();
+
+        $http = new RedmineHttpClient($client, $config, $logger);
+        $mapper = new RedminePayloadMapper();
+        $customFieldResolver = new RedmineCustomFieldResolver($http);
+
+        $this->ticketService = new RedmineTicketService($http, $config, $mapper, $customFieldResolver, $logger);
+        $this->clienteService = new RedmineClienteService(
+            new ApiContactResolver($http, $contactSearchPath, $contactUpsertPath, $logger),
+            $logger,
+        );
     }
 
     public function crearTicket(

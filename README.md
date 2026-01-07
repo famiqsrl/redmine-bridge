@@ -69,13 +69,13 @@ $ticketService->crearAdjunto($adjunto, $context);
 ### Uso con fachada
 
 Si prefieres una API unificada, puedes crear una fachada `RedmineBridge` y delegar
-los llamados en ella. La fachada genera automáticamente el `RequestContext` cuando
-no se lo pasas explícitamente.
+los llamados en ella. La fachada construye internamente los servicios y genera
+automáticamente el `RequestContext` cuando no se lo pasas explícitamente.
 
 ```php
 use Famiq\RedmineBridge\RedmineBridge;
 
-$bridge = new RedmineBridge($ticketService, $clienteService);
+$bridge = new RedmineBridge($config, $psr18Client, new NullLogger());
 
 $result = $bridge->crearTicket($ticket, 1, 2);
 $bridge->upsertCliente($cliente);

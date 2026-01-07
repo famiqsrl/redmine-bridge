@@ -49,7 +49,8 @@ final class RedmineTicketService
 
         $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
 
-        $issueId = (int) ($response['issue']['id'] ?? 0);
+        $issue = $response['issue'] ?? null;
+        $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
         return new CrearTicketResult($issueId);
     }
 
@@ -71,7 +72,7 @@ final class RedmineTicketService
 
         $response = $this->client->request('GET', $path, null, [], $context);
 
-        $items = $response['issues'] ?? [];
+        $items = $this->normalizeIssueItems($response['issues'] ?? null);
         $total = (int) ($response['total_count'] ?? count($items));
         $page = $page ?? 1;
         $perPage = $perPage ?? count($items);
@@ -94,7 +95,7 @@ final class RedmineTicketService
         $path = $this->buildPathWithQuery('/issues.json', $params);
 
         $response = $this->client->request('GET', $path, null, [], $context);
-        $items = $response['issues'] ?? [];
+        $items = $this->normalizeIssueItems($response['issues'] ?? null);
         $total = (int) ($response['total_count'] ?? count($items));
         $page = $page ?? 1;
         $perPage = $perPage ?? count($items);
@@ -111,7 +112,7 @@ final class RedmineTicketService
         $path = $this->buildPathWithQuery(sprintf('/issues/%d.json', $issueId), $params);
 
         $response = $this->client->request('GET', $path, null, [], $context);
-        $issue = $response['issue'] ?? [];
+        $issue = $response['issue'] ?? null;
 
         return new ObtenerTicketResult(is_array($issue) ? $issue : []);
     }
@@ -172,7 +173,8 @@ final class RedmineTicketService
             $context,
         );
 
-        $token = $response['upload']['token'] ?? null;
+        $upload = $response['upload'] ?? null;
+        $token = is_array($upload) ? ($upload['token'] ?? null) : null;
         if (!is_string($token)) {
             $this->logger->error('redmine.upload_missing_token', [
                 'filename' => $filename,
@@ -241,6 +243,7 @@ final class RedmineTicketService
     ): void {
         $missingIds = [];
         $missingKeys = [];
+        /** @var array<int, string> $idToName */
         $idToName = array_flip($customFieldMap);
 
         foreach ($issueCustomFields as $field) {
@@ -328,5 +331,24 @@ final class RedmineTicketService
         }
 
         return $path . '?' . http_build_query($params);
+    }
+
+    /**
+     * @return array<int, array<string, mixed>>
+     */
+    private function normalizeIssueItems(mixed $items): array
+    {
+        if (!is_array($items)) {
+            return [];
+        }
+
+        $normalized = [];
+        foreach ($items as $item) {
+            if (is_array($item)) {
+                $normalized[] = $item;
+            }
+        }
+
+        return $normalized;
     }
 }

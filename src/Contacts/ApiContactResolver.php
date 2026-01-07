@@ -35,18 +35,26 @@ final class ApiContactResolver implements ContactResolverInterface
 
         $response = $this->client->request('GET', $path, null, [], $context);
 
+        $contacts = $response['contacts'] ?? null;
+        if (!is_array($contacts)) {
+            $contacts = [];
+        }
+
         $items = [];
-        foreach ($response['contacts'] ?? [] as $contact) {
+        foreach ($contacts as $contact) {
+            if (!is_array($contact)) {
+                continue;
+            }
             $items[] = new ClienteDTO(
                 'empresa',
-                $contact['company'] ?? null,
-                $contact['first_name'] ?? null,
-                $contact['last_name'] ?? null,
-                $contact['tax_id'] ?? null,
-                $contact['emails'] ?? [],
-                $contact['phones'] ?? [],
-                $contact['address'] ?? null,
-                $contact['external_id'] ?? null,
+                isset($contact['company']) ? (string) $contact['company'] : null,
+                isset($contact['first_name']) ? (string) $contact['first_name'] : null,
+                isset($contact['last_name']) ? (string) $contact['last_name'] : null,
+                isset($contact['tax_id']) ? (string) $contact['tax_id'] : null,
+                is_array($contact['emails'] ?? null) ? array_values(array_map('strval', $contact['emails'])) : [],
+                is_array($contact['phones'] ?? null) ? array_values(array_map('strval', $contact['phones'])) : [],
+                isset($contact['address']) ? (string) $contact['address'] : null,
+                isset($contact['external_id']) ? (string) $contact['external_id'] : null,
                 'redmineup',
             );
         }
@@ -77,7 +85,8 @@ final class ApiContactResolver implements ContactResolverInterface
         ];
 
         $response = $this->client->request('POST', $this->upsertPath, $payload, [], $context);
-        $contactId = (string) ($response['contact']['id'] ?? '');
+        $contact = $response['contact'] ?? null;
+        $contactId = is_array($contact) ? (string) ($contact['id'] ?? '') : '';
 
         $this->logger->info('redmine.contact.upserted', [
             'contact_id' => $contactId,

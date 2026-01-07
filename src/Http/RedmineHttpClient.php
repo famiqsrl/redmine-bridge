@@ -114,14 +114,22 @@ final class RedmineHttpClient
         }
 
         if ($status >= 400) {
-            $decoded = $payload !== '' ? json_decode($payload, true) : [];
-            throw new RedmineValidationException('Redmine request failed', $decoded ?? [], $status);
+            $decoded = $payload !== '' ? $this->decodeJsonToArray($payload) : [];
+            throw new RedmineValidationException('Redmine request failed', $decoded, $status);
         }
 
         if ($payload === '') {
             return [];
         }
 
+        return $this->decodeJsonToArray($payload);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function decodeJsonToArray(string $payload): array
+    {
         $decoded = json_decode($payload, true);
 
         return is_array($decoded) ? $decoded : [];

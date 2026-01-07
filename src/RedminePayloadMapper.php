@@ -10,6 +10,7 @@ use Famiq\RedmineBridge\DTO\TicketDTO;
 final class RedminePayloadMapper
 {
     /**
+     * @param array<int, mixed> $resolvedCustomFieldsById
      * @return array<string, mixed>
      */
     public function issuePayload(TicketDTO $ticket, int $projectId, int $trackerId, array $resolvedCustomFieldsById): array
@@ -43,6 +44,7 @@ final class RedminePayloadMapper
     }
 
     /**
+     * @param array<int, mixed> $resolvedCustomFieldsById
      * @return array<int, array<string, mixed>>
      */
     private function buildCustomFields(array $resolvedCustomFieldsById): array

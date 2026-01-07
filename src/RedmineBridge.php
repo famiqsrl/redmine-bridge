@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge;
 
-use Famiq\RedmineBridge\Contacts\ApiContactResolver;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\BuscarClienteResult;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
@@ -41,7 +40,9 @@ final class RedmineBridge
 
         $this->ticketService = new RedmineTicketService($http, $config, $mapper, $customFieldResolver, $logger);
         $this->clienteService = new RedmineClienteService(
-            new ApiContactResolver($http, $contactSearchPath, $contactUpsertPath, $logger),
+            $http,
+            $contactSearchPath,
+            $contactUpsertPath,
             $logger,
         );
     }

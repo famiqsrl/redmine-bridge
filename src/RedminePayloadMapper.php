@@ -12,9 +12,9 @@ final class RedminePayloadMapper
     /**
      * @return array<string, mixed>
      */
-    public function issuePayload(TicketDTO $ticket, int $projectId, int $trackerId, array $customFieldMap): array
+    public function issuePayload(TicketDTO $ticket, int $projectId, int $trackerId, array $resolvedCustomFieldsById): array
     {
-        $customFields = $this->buildCustomFields($ticket, $customFieldMap);
+        $customFields = $this->buildCustomFields($resolvedCustomFieldsById);
 
         return [
             'issue' => array_filter([
@@ -45,24 +45,11 @@ final class RedminePayloadMapper
     /**
      * @return array<int, array<string, mixed>>
      */
-    /**
-     * @param array<string, int|string> $customFieldMap
-     * @return array<int, array<string, mixed>>
-     */
-    private function buildCustomFields(TicketDTO $ticket, array $customFieldMap): array
+    private function buildCustomFields(array $resolvedCustomFieldsById): array
     {
         $fields = [];
-        $map = $customFieldMap;
-
-        $this->pushCustomField($fields, $map['origen'] ?? null, $ticket->customFields['origen'] ?? null);
-        $this->pushCustomField($fields, $map['external_ticket_id'] ?? null, $ticket->externalTicketId);
-        $this->pushCustomField($fields, $map['canal'] ?? null, $ticket->canal);
-        $this->pushCustomField($fields, $map['contact_ref'] ?? null, $ticket->clienteRef);
-
-        foreach ($ticket->customFields as $key => $value) {
-            if (isset($map[$key])) {
-                $this->pushCustomField($fields, $map[$key], $value);
-            }
+        foreach ($resolvedCustomFieldsById as $id => $value) {
+            $this->pushCustomField($fields, (int) $id, $value);
         }
 
         return $fields;
@@ -71,9 +58,9 @@ final class RedminePayloadMapper
     /**
      * @param array<int, array<string, mixed>> $fields
      */
-    private function pushCustomField(array &$fields, int|string|null $fieldId, mixed $value): void
+    private function pushCustomField(array &$fields, ?int $fieldId, mixed $value): void
     {
-        if ($fieldId === null || $value === null) {
+        if ($fieldId === null || $value === null || $value === []) {
             return;
         }
 

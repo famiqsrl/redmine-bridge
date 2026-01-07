@@ -6,7 +6,8 @@ Tickets, mensajes y adjuntos, además de resolver contactos/CRM.
 
 ## Requisitos
 
-- PHP 8.2 o superior.
+- PHP 8.1 o superior.
+- Extensión `ext-json` habilitada.
 - Cliente HTTP PSR-18 (Guzzle, Symfony HttpClient, etc.).
 
 ## Instalación (Composer)
@@ -15,15 +16,53 @@ Tickets, mensajes y adjuntos, además de resolver contactos/CRM.
 composer require famiq/redmine-bridge
 ```
 
-## Uso básico
+## Uso recomendado (fachada)
 
-1. Crear una instancia de `RedmineConfig` con los datos de Redmine.
-2. Instanciar un cliente PSR-18 y un logger PSR-3.
-3. Crear `RedmineHttpClient`, `RedminePayloadMapper` y un store de idempotencia.
-4. Usar `RedmineTicketService` y `RedmineClienteService`.
+La fachada `RedmineBridge` construye internamente los servicios necesarios y
+genera automáticamente el `RequestContext` cuando no se lo pasas explícitamente.
 
 ```php
-use Famiq\RedmineBridge\Contacts\ApiContactResolver;
+use Famiq\RedmineBridge\RedmineBridge;
+use Famiq\RedmineBridge\RedmineConfig;
+use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\DTO\ClienteDTO;
+use Famiq\RedmineBridge\DTO\MensajeDTO;
+use Famiq\RedmineBridge\DTO\AdjuntoDTO;
+use Psr\Log\NullLogger;
+
+$config = new RedmineConfig(
+    'https://redmine.example.com',
+    'usuario',
+    'contraseña',
+    ['external_ticket_id' => 11, 'cliente_ref' => 12],
+);
+
+$bridge = new RedmineBridge(
+    $config,
+    $psr18Client,
+    new NullLogger(),
+    '/contacts/search.json',
+    '/contacts.json',
+);
+
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
+$result = $bridge->crearTicket($ticket, 1, 2);
+
+$cliente = new ClienteDTO('empresa', 'ACME', null, null, '30-12345678-9', [], [], null, 'EXT-1', 'crm');
+$bridge->upsertCliente($cliente);
+
+$mensaje = new MensajeDTO($result->issueId, 'Seguimiento interno', 'internal', null);
+$bridge->crearMensaje($mensaje);
+
+$adjunto = new AdjuntoDTO($result->issueId, 'archivo.txt', 'text/plain', 'contenido', null, null);
+$bridge->crearAdjunto($adjunto);
+```
+
+## Uso con servicios
+
+Si necesitas más control, puedes construir los servicios manualmente.
+
+```php
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
@@ -40,20 +79,17 @@ $config = new RedmineConfig(
     'https://redmine.example.com',
     'usuario',
     'contraseña',
-    ['external_ticket_id' => 11],
+    ['external_ticket_id' => 11, 'cliente_ref' => 12],
 );
 
 $http = new RedmineHttpClient($psr18Client, $config, new NullLogger());
 $mapper = new RedminePayloadMapper();
 $ticketService = new RedmineTicketService($http, $config, $mapper, new NullLogger());
-$clienteService = new RedmineClienteService(
-    new ApiContactResolver($http, '/contacts/search.json', '/contacts.json', new NullLogger()),
-    new NullLogger()
-);
+$clienteService = new RedmineClienteService($http, '/contacts/search.json', '/contacts.json', new NullLogger());
 
-$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
 $context = RequestContext::generate();
 
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
 $result = $ticketService->crearTicket($ticket, 1, 2, $context);
 
 $cliente = new ClienteDTO('empresa', 'ACME', null, null, '30-12345678-9', [], [], null, 'EXT-1', 'crm');
@@ -66,26 +102,11 @@ $adjunto = new AdjuntoDTO($result->issueId, 'archivo.txt', 'text/plain', 'conten
 $ticketService->crearAdjunto($adjunto, $context);
 ```
 
-### Uso con fachada
-
-Si prefieres una API unificada, puedes crear una fachada `RedmineBridge` y delegar
-los llamados en ella. La fachada construye internamente los servicios y genera
-automáticamente el `RequestContext` cuando no se lo pasas explícitamente.
-
-```php
-use Famiq\RedmineBridge\RedmineBridge;
-
-$bridge = new RedmineBridge($config, $psr18Client, new NullLogger());
-
-$result = $bridge->crearTicket($ticket, 1, 2);
-$bridge->upsertCliente($cliente);
-$bridge->crearMensaje($mensaje);
-$bridge->crearAdjunto($adjunto);
-```
-
 ### Consultar tickets
 
 ```php
+use Famiq\RedmineBridge\RequestContext;
+
 $context = RequestContext::generate();
 
 // Listar tickets con filtros y selección de campos
@@ -101,13 +122,23 @@ $result = $ticketService->consultarTickets($filters, $select, 1, 20, $context);
 $ticket = $ticketService->obtenerTicket(123, ['id', 'subject', 'custom_fields'], $context);
 ```
 
+## Calidad (PHPStan)
+
+El proyecto incluye configuración de PHPStan al nivel máximo para asegurar un
+análisis estricto del código. Para ejecutarlo:
+
+```bash
+composer install
+vendor/bin/phpstan analyse
+```
+
 ## Laravel y Symfony
 
 Este paquete no depende de ningún framework y funciona en Laravel y Symfony con
 cualquier cliente PSR-18.
 
 - **Laravel**: puedes registrar el cliente PSR-18 (por ejemplo, Guzzle) en el
-  contenedor e inyectarlo donde construyas `RedmineHttpClient`.
+  contenedor e inyectarlo donde construyas `RedmineHttpClient` o `RedmineBridge`.
 - **Symfony**: puedes usar `symfony/http-client` junto con el bridge PSR-18 o
   cualquier implementación PSR-18 compatible.
 

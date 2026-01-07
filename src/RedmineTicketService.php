@@ -33,6 +33,10 @@ final class RedmineTicketService
         $issueCustomFields = $this->customFieldResolver->getIssueCustomFieldsForTracker($trackerId, $context);
         $customFieldMap = $this->customFieldResolver->getIssueCustomFieldNameToIdMapForTracker($trackerId, $context);
         $resolvedCustomFieldsById = $this->resolveCustomFieldsById($ticket->customFields, $customFieldMap);
+        $resolvedCustomFieldsById = $this->autofillRequiredCustomFields(
+            $issueCustomFields,
+            $resolvedCustomFieldsById,
+        );
         $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
 
         $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
@@ -151,6 +155,30 @@ final class RedmineTicketService
         }
 
         return $resolved;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $issueCustomFields
+     * @param array<int, mixed> $resolvedCustomFieldsById
+     * @return array<int, mixed>
+     */
+    private function autofillRequiredCustomFields(array $issueCustomFields, array $resolvedCustomFieldsById): array
+    {
+        foreach ($issueCustomFields as $field) {
+            if (($field['required'] ?? false) !== true) {
+                continue;
+            }
+
+            $fieldId = (int) ($field['id'] ?? 0);
+            if (!array_key_exists($fieldId, $resolvedCustomFieldsById)) {
+                $possibleValues = $field['possible_values'] ?? [];
+                if (is_array($possibleValues) && $possibleValues !== []) {
+                    $resolvedCustomFieldsById[$fieldId] = $possibleValues[0];
+                }
+            }
+        }
+
+        return $resolvedCustomFieldsById;
     }
 
     /**

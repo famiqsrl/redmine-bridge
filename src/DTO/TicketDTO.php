@@ -17,6 +17,7 @@ final class TicketDTO
         public ?string $canal,
         public ?string $externalTicketId,
         public ?string $clienteRef,
+        public ?int $assignedToId,
         public array $customFields,
     ) {
     }

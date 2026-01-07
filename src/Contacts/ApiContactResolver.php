@@ -13,7 +13,7 @@ use Famiq\RedmineBridge\RequestContext;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
-final class ApiContactResolver implements ContactResolverInterface
+final class ApiContactResolver
 {
     public function __construct(
         private RedmineHttpClient $client,

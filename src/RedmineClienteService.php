@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Famiq\RedmineBridge;
 
 use Famiq\RedmineBridge\Contacts\ApiContactResolver;
-use Famiq\RedmineBridge\Contacts\ContactResolverInterface;
 use Famiq\RedmineBridge\DTO\BuscarClienteResult;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
 use Famiq\RedmineBridge\DTO\UpsertClienteResult;
@@ -15,8 +14,8 @@ use Psr\Log\NullLogger;
 
 final class RedmineClienteService
 {
-    private ContactResolverInterface $searchResolver;
-    private ContactResolverInterface $upsertResolver;
+    private ApiContactResolver $searchResolver;
+    private ApiContactResolver $upsertResolver;
 
     public function __construct(
         RedmineHttpClient $client,

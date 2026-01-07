@@ -66,6 +66,23 @@ $adjunto = new AdjuntoDTO($result->issueId, 'archivo.txt', 'text/plain', 'conten
 $ticketService->crearAdjunto($adjunto, $context);
 ```
 
+### Uso con fachada
+
+Si prefieres una API unificada, puedes crear una fachada `RedmineBridge` y delegar
+los llamados en ella. La fachada genera automáticamente el `RequestContext` cuando
+no se lo pasas explícitamente.
+
+```php
+use Famiq\RedmineBridge\RedmineBridge;
+
+$bridge = new RedmineBridge($ticketService, $clienteService);
+
+$result = $bridge->crearTicket($ticket, 1, 2);
+$bridge->upsertCliente($cliente);
+$bridge->crearMensaje($mensaje);
+$bridge->crearAdjunto($adjunto);
+```
+
 ### Consultar tickets
 
 ```php

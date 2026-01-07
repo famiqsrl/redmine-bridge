@@ -41,7 +41,13 @@ final class RedmineTicketService
         $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
 
         $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
-        $response = $this->client->request('POST', '/issues.json', $payload, [], $context);
+        $headers = [];
+
+        if (!empty($context->idUsuario)) {
+            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        }
+
+        $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
 
         $issueId = (int) ($response['issue']['id'] ?? 0);
         return new CrearTicketResult($issueId);

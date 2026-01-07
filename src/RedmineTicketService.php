@@ -11,6 +11,7 @@ use Famiq\RedmineBridge\DTO\CrearTicketResult;
 use Famiq\RedmineBridge\DTO\ListarTicketsResult;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\Exceptions\MissingRequiredCustomFieldsException;
 use Famiq\RedmineBridge\Exceptions\RedmineTransportException;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Log\LoggerInterface;
@@ -22,13 +23,19 @@ final class RedmineTicketService
         private RedmineHttpClient $client,
         private RedmineConfig $config,
         private RedminePayloadMapper $mapper,
+        private RedmineCustomFieldResolver $customFieldResolver,
         private LoggerInterface $logger = new NullLogger(),
     ) {
     }
 
     public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
     {
-        $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $this->config->customFieldMap);
+        $issueCustomFields = $this->customFieldResolver->getIssueCustomFieldsForTracker($trackerId, $context);
+        $customFieldMap = $this->customFieldResolver->getIssueCustomFieldNameToIdMapForTracker($trackerId, $context);
+        $resolvedCustomFieldsById = $this->resolveCustomFieldsById($ticket->customFields, $customFieldMap);
+        $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
+
+        $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
         $response = $this->client->request('POST', '/issues.json', $payload, [], $context);
 
         $issueId = (int) ($response['issue']['id'] ?? 0);
@@ -124,5 +131,81 @@ final class RedmineTicketService
         }
 
         return $token;
+    }
+
+    /**
+     * @param array<string, mixed> $customFields
+     * @param array<string, int> $customFieldMap
+     * @return array<int, mixed>
+     */
+    private function resolveCustomFieldsById(array $customFields, array $customFieldMap): array
+    {
+        $resolved = [];
+
+        foreach ($customFields as $key => $value) {
+            if (!array_key_exists($key, $customFieldMap)) {
+                continue;
+            }
+
+            $resolved[$customFieldMap[$key]] = $value;
+        }
+
+        return $resolved;
+    }
+
+    /**
+     * @param array<int, array<string, mixed>> $issueCustomFields
+     * @param array<int, mixed> $resolvedCustomFieldsById
+     * @param array<string, int> $customFieldMap
+     */
+    private function assertRequiredCustomFields(
+        int $trackerId,
+        array $issueCustomFields,
+        array $resolvedCustomFieldsById,
+        array $customFieldMap,
+    ): void {
+        $missingIds = [];
+        $missingKeys = [];
+        $idToName = array_flip($customFieldMap);
+
+        foreach ($issueCustomFields as $field) {
+            if (($field['required'] ?? false) !== true) {
+                continue;
+            }
+
+            $fieldId = (int) ($field['id'] ?? 0);
+            $value = $resolvedCustomFieldsById[$fieldId] ?? null;
+
+            if (!$this->isMissingRequiredValue($value)) {
+                continue;
+            }
+
+            $missingIds[] = $fieldId;
+            $nameKey = $idToName[(string) $fieldId] ?? null;
+            if ($nameKey !== null) {
+                $missingKeys[] = $nameKey;
+            }
+        }
+
+        if ($missingIds !== []) {
+            throw new MissingRequiredCustomFieldsException($trackerId, $missingKeys, $missingIds);
+        }
+    }
+
+    private function isMissingRequiredValue(mixed $value): bool
+    {
+        if ($value === null) {
+            return true;
+        }
+
+        if (is_string($value) && $value === '') {
+            return true;
+        }
+
+        if (is_array($value) && $value === []) {
+            return true;
+        }
+
+        return false;
     }
 }

@@ -66,6 +66,24 @@ $adjunto = new AdjuntoDTO($result->issueId, 'archivo.txt', 'text/plain', 'conten
 $ticketService->crearAdjunto($adjunto, $context);
 ```
 
+### Consultar tickets
+
+```php
+$context = RequestContext::generate();
+
+// Listar tickets con filtros y selección de campos
+$filters = [
+    'status_id' => 'open',
+    'project_id' => 1,
+];
+$select = ['id', 'subject', 'status', 'priority'];
+
+$result = $ticketService->consultarTickets($filters, $select, 1, 20, $context);
+
+// Obtener un ticket individual
+$ticket = $ticketService->obtenerTicket(123, ['id', 'subject', 'custom_fields'], $context);
+```
+
 ## Laravel y Symfony
 
 Este paquete no depende de ningún framework y funciona en Laravel y Symfony con

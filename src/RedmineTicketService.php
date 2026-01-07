@@ -10,6 +10,7 @@ use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
 use Famiq\RedmineBridge\DTO\ListarTicketsResult;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
+use Famiq\RedmineBridge\DTO\ObtenerTicketResult;
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\Exceptions\MissingRequiredCustomFieldsException;
 use Famiq\RedmineBridge\Exceptions\RedmineTransportException;
@@ -48,16 +49,19 @@ final class RedmineTicketService
 
     public function listarTickets(?string $status, ?int $page, ?int $perPage, ?string $clienteRef, RequestContext $context): ListarTicketsResult
     {
-        $params = array_filter([
+        $filters = [
             'status_id' => $status,
-            'page' => $page,
-            'limit' => $perPage,
-        ], static fn ($value) => $value !== null);
+        ];
 
-        $path = '/issues.json';
-        if ($params !== []) {
-            $path .= '?' . http_build_query($params);
+        if ($clienteRef !== null) {
+            $customFieldId = $this->config->customFieldMap['cliente_ref'] ?? null;
+            if ($customFieldId !== null) {
+                $filters['cf_' . $customFieldId] = $clienteRef;
+            }
         }
+
+        $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
+        $path = $this->buildPathWithQuery('/issues.json', $params);
 
         $response = $this->client->request('GET', $path, null, [], $context);
 
@@ -67,6 +71,43 @@ final class RedmineTicketService
         $perPage = $perPage ?? count($items);
 
         return new ListarTicketsResult($items, $total, $page, $perPage);
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     * @param string[]|null $select
+     */
+    public function consultarTickets(
+        array $filters,
+        ?array $select,
+        ?int $page,
+        ?int $perPage,
+        RequestContext $context,
+    ): ListarTicketsResult {
+        $params = $this->buildTicketQueryParams($filters, $select, $page, $perPage);
+        $path = $this->buildPathWithQuery('/issues.json', $params);
+
+        $response = $this->client->request('GET', $path, null, [], $context);
+        $items = $response['issues'] ?? [];
+        $total = (int) ($response['total_count'] ?? count($items));
+        $page = $page ?? 1;
+        $perPage = $perPage ?? count($items);
+
+        return new ListarTicketsResult($items, $total, $page, $perPage);
+    }
+
+    /**
+     * @param string[]|null $select
+     */
+    public function obtenerTicket(int $issueId, ?array $select, RequestContext $context): ObtenerTicketResult
+    {
+        $params = $this->buildTicketQueryParams([], $select, null, null);
+        $path = $this->buildPathWithQuery(sprintf('/issues/%d.json', $issueId), $params);
+
+        $response = $this->client->request('GET', $path, null, [], $context);
+        $issue = $response['issue'] ?? [];
+
+        return new ObtenerTicketResult(is_array($issue) ? $issue : []);
     }
 
     public function crearMensaje(MensajeDTO $mensaje, RequestContext $context): CrearMensajeResult
@@ -235,5 +276,51 @@ final class RedmineTicketService
         }
 
         return false;
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     * @param string[]|null $select
+     * @return array<string, mixed>
+     */
+    private function buildTicketQueryParams(array $filters, ?array $select, ?int $page, ?int $perPage): array
+    {
+        $params = [];
+
+        foreach ($filters as $key => $value) {
+            if ($value === null) {
+                continue;
+            }
+            $params[$key] = $value;
+        }
+
+        if ($select !== null) {
+            $normalizedSelect = array_values(array_filter(array_map('strval', $select), static fn ($value) => $value !== ''));
+            if ($normalizedSelect !== []) {
+                $params['select'] = implode(',', $normalizedSelect);
+            }
+        }
+
+        if ($page !== null) {
+            $params['page'] = $page;
+        }
+
+        if ($perPage !== null) {
+            $params['limit'] = $perPage;
+        }
+
+        return $params;
+    }
+
+    /**
+     * @param array<string, mixed> $params
+     */
+    private function buildPathWithQuery(string $path, array $params): string
+    {
+        if ($params === []) {
+            return $path;
+        }
+
+        return $path . '?' . http_build_query($params);
     }
 }

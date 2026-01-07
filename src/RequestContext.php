@@ -8,11 +8,12 @@ final class RequestContext
 {
     public function __construct(
         public string $correlationId,
+        public ?string $userLogin = null,
     ) {
     }
 
-    public static function generate(): self
+    public static function generate(?string $userLogin = null): self
     {
-        return new self(bin2hex(random_bytes(16)));
+        return new self(bin2hex(random_bytes(16)), $userLogin);
     }
 }

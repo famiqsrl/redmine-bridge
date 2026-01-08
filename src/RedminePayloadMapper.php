@@ -16,6 +16,8 @@ final class RedminePayloadMapper
     public function issuePayload(TicketDTO $ticket, int $projectId, int $trackerId, array $resolvedCustomFieldsById): array
     {
         $customFields = $this->buildCustomFields($resolvedCustomFieldsById);
+        $contactIds = $this->normalizeContactIds($ticket);
+        $contactEmails = $this->normalizeContactEmails($ticket);
 
         return [
             'issue' => array_filter([
@@ -25,6 +27,8 @@ final class RedminePayloadMapper
                 'description' => $ticket->description,
                 'priority_id' => $ticket->prioridad,
                 'category_id' => $ticket->categoria,
+                'contact_ids' => $contactIds,
+                'contact_emails' => $contactEmails,
                 'custom_fields' => $customFields,
             ], static fn ($value) => $value !== null && $value !== []),
         ];
@@ -72,4 +76,32 @@ final class RedminePayloadMapper
         ];
     }
 
+    /**
+     * @return int[]
+     */
+    private function normalizeContactIds(TicketDTO $ticket): array
+    {
+        $contactIds = $ticket->contacts?->ids ?? [];
+
+        return array_values(array_filter(
+            array_map(
+                static fn (int|string $id): int => (int) $id,
+                array_filter($contactIds, static fn (mixed $id): bool => $id !== null && $id !== '')
+            ),
+            static fn (int $id): bool => $id > 0
+        ));
+    }
+
+    /**
+     * @return string[]
+     */
+    private function normalizeContactEmails(TicketDTO $ticket): array
+    {
+        $emails = $ticket->contacts?->emails ?? [];
+
+        return array_values(array_filter(
+            array_map('strval', $emails),
+            static fn (string $email): bool => $email !== ''
+        ));
+    }
 }

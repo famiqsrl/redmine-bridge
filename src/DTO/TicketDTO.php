@@ -18,6 +18,7 @@ final class TicketDTO
         public ?string $externalTicketId,
         public ?string $clienteRef,
         public array $customFields,
+        public ?ContactsDTO $contacts = null,
     ) {
     }
 }

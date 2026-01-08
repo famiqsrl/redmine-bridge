@@ -25,6 +25,7 @@ genera automáticamente el `RequestContext` cuando no se lo pasas explícitament
 use Famiq\RedmineBridge\RedmineBridge;
 use Famiq\RedmineBridge\RedmineConfig;
 use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\DTO\ContactsDTO;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
@@ -45,7 +46,8 @@ $bridge = new RedmineBridge(
     '/contacts.json',
 );
 
-$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
+$contacts = new ContactsDTO([123], ['cliente@example.com']);
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', [], $contacts);
 $result = $bridge->crearTicket($ticket, 1, 2);
 
 $cliente = new ClienteDTO('empresa', 'ACME', null, null, '30-12345678-9', [], [], null, 'EXT-1', 'crm');
@@ -64,6 +66,7 @@ Si necesitas más control, puedes construir los servicios manualmente.
 
 ```php
 use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\DTO\ContactsDTO;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
 use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
@@ -89,7 +92,8 @@ $clienteService = new RedmineClienteService($http, '/contacts/search.json', '/co
 
 $context = RequestContext::generate();
 
-$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', []);
+$contacts = new ContactsDTO([123], ['cliente@example.com']);
+$ticket = new TicketDTO('Asunto', 'Detalle', 'media', null, 'email', 'EXT-123', 'C-1', [], $contacts);
 $result = $ticketService->crearTicket($ticket, 1, 2, $context);
 
 $cliente = new ClienteDTO('empresa', 'ACME', null, null, '30-12345678-9', [], [], null, 'EXT-1', 'crm');

@@ -31,16 +31,7 @@ final class RedmineTicketService
 
     public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
     {
-        $issueCustomFields = $this->customFieldResolver->getIssueCustomFieldsForTracker($trackerId, $context);
-        $customFieldMap = $this->customFieldResolver->getIssueCustomFieldNameToIdMapForTracker($trackerId, $context);
-        $resolvedCustomFieldsById = $this->resolveCustomFieldsById($ticket->customFields, $customFieldMap);
-        $resolvedCustomFieldsById = $this->autofillRequiredCustomFields(
-            $issueCustomFields,
-            $resolvedCustomFieldsById,
-        );
-        $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
-
-        $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
+        $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
         $headers = [];
 
         if (!empty($context->idUsuario)) {
@@ -51,6 +42,42 @@ final class RedmineTicketService
 
         $issue = $response['issue'] ?? null;
         $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+        return new CrearTicketResult($issueId);
+    }
+
+    public function crearHelpdeskTicket(
+        TicketDTO $ticket,
+        string $contactEmail,
+        int $projectId,
+        int $trackerId,
+        RequestContext $context,
+    ): CrearTicketResult {
+        $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+        $headers = [];
+
+        if (!empty($context->idUsuario)) {
+            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        }
+
+        $payload = [
+            'helpdesk_ticket' => [
+                'issue' => $issuePayload['issue'] ?? [],
+                'contact' => [
+                    'email' => $contactEmail,
+                ],
+            ],
+        ];
+
+        $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+
+        $issue = $response['issue'] ?? null;
+        if (!is_array($issue)) {
+            $helpdeskTicket = $response['helpdesk_ticket'] ?? null;
+            $issue = is_array($helpdeskTicket) ? ($helpdeskTicket['issue'] ?? null) : null;
+        }
+
+        $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+
         return new CrearTicketResult($issueId);
     }
 
@@ -158,6 +185,23 @@ final class RedmineTicketService
         }
 
         return $content;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function buildIssuePayload(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): array
+    {
+        $issueCustomFields = $this->customFieldResolver->getIssueCustomFieldsForTracker($trackerId, $context);
+        $customFieldMap = $this->customFieldResolver->getIssueCustomFieldNameToIdMapForTracker($trackerId, $context);
+        $resolvedCustomFieldsById = $this->resolveCustomFieldsById($ticket->customFields, $customFieldMap);
+        $resolvedCustomFieldsById = $this->autofillRequiredCustomFields(
+            $issueCustomFields,
+            $resolvedCustomFieldsById,
+        );
+        $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
+
+        return $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
     }
 
     private function uploadContent(string $content, string $filename, RequestContext $context): string

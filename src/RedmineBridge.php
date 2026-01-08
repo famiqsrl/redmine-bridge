@@ -56,6 +56,22 @@ final class RedmineBridge
         return $this->ticketService->crearTicket($ticket, $projectId, $trackerId, $this->resolveContext($context));
     }
 
+    public function crearHelpdeskTicket(
+        TicketDTO $ticket,
+        string $contactEmail,
+        int $projectId,
+        int $trackerId,
+        ?RequestContext $context = null,
+    ): CrearTicketResult {
+        return $this->ticketService->crearHelpdeskTicket(
+            $ticket,
+            $contactEmail,
+            $projectId,
+            $trackerId,
+            $this->resolveContext($context),
+        );
+    }
+
     public function listarTickets(
         ?string $status,
         ?int $page = null,

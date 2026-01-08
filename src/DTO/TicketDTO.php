@@ -12,12 +12,12 @@ final class TicketDTO
     public function __construct(
         public string $subject,
         public string $description,
-        public string $prioridad,
-        public ?string $categoria,
-        public ?string $canal,
-        public ?string $externalTicketId,
-        public ?string $clienteRef,
-        public array $customFields,
+        public string $prioridad = '1',
+        public ?string $categoria = null,
+        public ?string $canal = null,
+        public ?string $externalTicketId = null,
+        public ?string $clienteRef = null,
+        public array $customFields = [],
     ) {
     }
 }

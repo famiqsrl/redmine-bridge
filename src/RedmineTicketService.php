@@ -69,14 +69,9 @@ final class RedmineTicketService
         ];
 
         $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
-
-        $issue = $response['issue'] ?? null;
-        if (!is_array($issue)) {
-            $helpdeskTicket = $response['helpdesk_ticket'] ?? null;
-            $issue = is_array($helpdeskTicket) ? ($helpdeskTicket['issue'] ?? null) : null;
-        }
-
-        $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+        $issue = $response['helpdesk_ticket'] ?? null;
+      
+        $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
 
         return new CrearTicketResult($issueId);
     }

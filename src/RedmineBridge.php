@@ -20,6 +20,9 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
+/**
+ * Facade principal para operar con la API de Redmine.
+ */
 final class RedmineBridge
 {
     private RedmineTicketService $ticketService;

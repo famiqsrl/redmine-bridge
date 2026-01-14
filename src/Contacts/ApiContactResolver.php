@@ -70,29 +70,74 @@ final class ApiContactResolver
             throw new RedmineTransportException('Contacts API upsert path not configured');
         }
 
+        $searchValue = $cliente->externalId ?? $cliente->razonSocial ?? $cliente->nombre ?? '';
+        $searchPath = $this->searchPath . '?' . http_build_query(['search' => $searchValue]);
+
+        $searchResponse = $this->client->request('GET', $searchPath, null, [], $context);
+
+        $contacts = $searchResponse['contacts'] ?? [];
+        if (!is_array($contacts)) {
+            $contacts = [];
+        }
+
+        $matchedId = null;
+        foreach ($contacts as $c) {
+            if (!is_array($c)) {
+                continue;
+            }
+
+            $ext = isset($c['external_id']) ? (string) $c['external_id'] : null;
+            if ($cliente->externalId !== null && $ext !== null && $ext === $cliente->externalId) {
+                $matchedId = isset($c['id']) ? (string) $c['id'] : null;
+                break;
+            }
+        }
+
+        $primaryEmail = $cliente->emails[0] ?? null;
+        $primaryPhone = $cliente->telefonos[0] ?? null;
+
         $payload = [
-            'contact' => [
-                'company' => $cliente->razonSocial,
+            'contact' => array_filter([
+                'is_company' => $cliente->razonSocial !== null && $cliente->razonSocial !== '',
+                'company'    => $cliente->razonSocial,
                 'first_name' => $cliente->nombre,
-                'last_name' => $cliente->apellido,
-                'tax_id' => $cliente->cuit,
-                'emails' => $cliente->emails,
-                'phones' => $cliente->telefonos,
-                'address' => $cliente->direccion,
+                'last_name'  => $cliente->apellido,
+
+                'email' => $primaryEmail,
+                'phone' => $primaryPhone,
+
+                'address_attributes' => $cliente->direccion ? ['full_address' => $cliente->direccion] : null,
+
                 'external_id' => $cliente->externalId,
-                'source' => $cliente->sourceSystem,
-            ],
+                'source'      => $cliente->sourceSystem,
+            ], static fn($v) => $v !== null && $v !== ''),
         ];
+
+        if ($matchedId !== null && $matchedId !== '') {
+            $updatePath = preg_replace('#/contacts\.json$#', '/contacts/' . $matchedId . '.json', $this->upsertPath) ?? ('/contacts/' . $matchedId . '.json');
+
+            $response = $this->client->request('PUT', $updatePath, $payload, [], $context);
+
+            $contact = $response['contact'] ?? null;
+            $contactId = is_array($contact) ? (string) ($contact['id'] ?? $matchedId) : $matchedId;
+
+            $this->logger->info('redmine.contact.updated', [
+                'contact_id' => $contactId,
+                'correlation_id' => $context->correlationId,
+            ]);
+
+            return new UpsertClienteResult('updated', $contactId !== '' ? $contactId : null, $cliente->externalId);
+        }
 
         $response = $this->client->request('POST', $this->upsertPath, $payload, [], $context);
         $contact = $response['contact'] ?? null;
         $contactId = is_array($contact) ? (string) ($contact['id'] ?? '') : '';
 
-        $this->logger->info('redmine.contact.upserted', [
+        $this->logger->info('redmine.contact.created', [
             'contact_id' => $contactId,
             'correlation_id' => $context->correlationId,
         ]);
 
-        return new UpsertClienteResult('updated', $contactId !== '' ? $contactId : null, $cliente->externalId);
+        return new UpsertClienteResult('created', $contactId !== '' ? $contactId : null, $cliente->externalId);
     }
 }

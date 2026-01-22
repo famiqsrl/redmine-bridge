@@ -51,6 +51,7 @@ final class RedmineTicketService
         int $projectId,
         int $trackerId,
         RequestContext $context,
+        ?array $cliente = null,
     ): CrearTicketResult {
         $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
         $headers = [];

@@ -62,13 +62,26 @@ final class RedmineBridge
         int $projectId,
         int $trackerId,
         ?RequestContext $context = null,
+        ?array $cliente = null,
     ): CrearTicketResult {
+        $resolvedContext = $this->resolveContext($context);
+
+        if ($contactEmail !== '') {
+            $searchResult = $this->clienteService->buscarCliente($contactEmail, null, $resolvedContext);
+            if ($searchResult->items === [] && is_array($cliente)) {
+                $this->clienteService->upsertCliente(
+                    $this->buildClienteFromArray($cliente, $contactEmail),
+                    $resolvedContext,
+                );
+            }
+        }
+
         return $this->ticketService->crearHelpdeskTicket(
             $ticket,
             $contactEmail,
             $projectId,
             $trackerId,
-            $this->resolveContext($context),
+            $resolvedContext,
         );
     }
 
@@ -127,5 +140,63 @@ final class RedmineBridge
     private function resolveContext(?RequestContext $context): RequestContext
     {
         return $context ?? RequestContext::generate();
+    }
+
+    /**
+     * @param array<string, mixed> $cliente
+     */
+    private function buildClienteFromArray(array $cliente, string $contactEmail): ClienteDTO
+    {
+        $emails = $this->normalizeStringArray($cliente['emails'] ?? []);
+        if ($contactEmail !== '' && !in_array($contactEmail, $emails, true)) {
+            $emails[] = $contactEmail;
+        }
+
+        return new ClienteDTO(
+            $this->normalizeString($cliente['tipo'] ?? null) ?? 'persona',
+            $this->normalizeString($cliente['razonSocial'] ?? null),
+            $this->normalizeString($cliente['nombre'] ?? null),
+            $this->normalizeString($cliente['apellido'] ?? null),
+            $this->normalizeString($cliente['cuit'] ?? null),
+            $emails,
+            $this->normalizeStringArray($cliente['telefonos'] ?? []),
+            $this->normalizeString($cliente['direccion'] ?? null),
+            $this->normalizeString($cliente['externalId'] ?? null),
+            $this->normalizeString($cliente['sourceSystem'] ?? null) ?? 'helpdesk',
+        );
+    }
+
+    private function normalizeString(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $trimmed = trim($value);
+        return $trimmed === '' ? null : $trimmed;
+    }
+
+    /**
+     * @return string[]
+     */
+    private function normalizeStringArray(mixed $value): array
+    {
+        if (!is_array($value)) {
+            return [];
+        }
+
+        $items = [];
+        foreach ($value as $item) {
+            if (!is_string($item)) {
+                continue;
+            }
+
+            $trimmed = trim($item);
+            if ($trimmed !== '') {
+                $items[] = $trimmed;
+            }
+        }
+
+        return $items;
     }
 }

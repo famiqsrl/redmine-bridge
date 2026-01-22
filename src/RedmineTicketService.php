@@ -18,6 +18,9 @@ use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
+/**
+ * Servicio encargado de gestionar operaciones de tickets en Redmine.
+ */
 final class RedmineTicketService
 {
     public function __construct(
@@ -32,11 +35,7 @@ final class RedmineTicketService
     public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
     {
         $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
-        $headers = [];
-
-        if (!empty($context->idUsuario)) {
-            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
-        }
+        $headers = $this->buildUserSwitchHeaders($context);
 
         $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
 
@@ -54,11 +53,7 @@ final class RedmineTicketService
         ?array $cliente = null,
     ): CrearTicketResult {
         $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
-        $headers = [];
-
-        if (!empty($context->idUsuario)) {
-            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
-        }
+        $headers = $this->buildUserSwitchHeaders($context);
 
         $payload = [
             'helpdesk_ticket' => [
@@ -71,8 +66,8 @@ final class RedmineTicketService
 
         $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
         $issue = $response['helpdesk_ticket'] ?? null;
-      
-        $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
+
+        $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
 
         return new CrearTicketResult($issueId);
     }
@@ -168,6 +163,20 @@ final class RedmineTicketService
         $this->client->request('PUT', sprintf('/issues/%d.json', $adjunto->issueId), $payload, [], $context);
 
         return new CrearAdjuntoResult(null);
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function buildUserSwitchHeaders(RequestContext $context): array
+    {
+        if (empty($context->idUsuario)) {
+            return [];
+        }
+
+        return [
+            'X-Redmine-Switch-User' => (string) $context->idUsuario,
+        ];
     }
 
     private function resolveContent(string $content): string

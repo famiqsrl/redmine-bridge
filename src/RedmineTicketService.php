@@ -77,6 +77,36 @@ final class RedmineTicketService
         return new CrearTicketResult($issueId);
     }
 
+    /**
+     * @return array{issueId: int}
+     */
+    public function crearHelpdeskTicketUsandoContacto(
+        TicketDTO $ticket,
+        int $contactId,
+        int $projectId,
+        int $trackerId,
+        RequestContext $context,
+    ): array {
+        $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+        $headers = [];
+
+        if (!empty($context->idUsuario)) {
+            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        }
+
+        $payload = [
+            'helpdesk_ticket' => [
+                'issue' => $issuePayload['issue'] ?? [],
+                'contact_id' => $contactId,
+            ],
+        ];
+
+        $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+        $issueId = $this->normalizeHelpdeskIssueId($response);
+
+        return ['issueId' => $issueId];
+    }
+
     public function listarTickets(?string $status, ?int $page, ?int $perPage, ?string $clienteRef, RequestContext $context): ListarTicketsResult
     {
         $filters = [
@@ -181,6 +211,35 @@ final class RedmineTicketService
         }
 
         return $content;
+    }
+
+    /**
+     * @param array<string, mixed> $response
+     */
+    private function normalizeHelpdeskIssueId(array $response): int
+    {
+        $helpdesk = $response['helpdesk_ticket'] ?? null;
+        if (is_array($helpdesk)) {
+            $issueId = $helpdesk['issue_id'] ?? $helpdesk['id'] ?? null;
+            if (is_numeric($issueId)) {
+                return (int) $issueId;
+            }
+        }
+
+        $issue = $response['issue'] ?? null;
+        if (is_array($issue)) {
+            $issueId = $issue['id'] ?? null;
+            if (is_numeric($issueId)) {
+                return (int) $issueId;
+            }
+        }
+
+        $issueId = $response['issue_id'] ?? $response['id'] ?? null;
+        if (is_numeric($issueId)) {
+            return (int) $issueId;
+        }
+
+        return 0;
     }
 
     /**

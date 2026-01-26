@@ -7,6 +7,7 @@ namespace Famiq\RedmineBridge;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\BuscarClienteResult;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
+use Famiq\RedmineBridge\DTO\ContactDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
@@ -24,6 +25,7 @@ final class RedmineBridge
 {
     private RedmineTicketService $ticketService;
     private RedmineClienteService $clienteService;
+    private RedmineContactService $contactService;
 
     public function __construct(
         RedmineConfig $config,
@@ -45,6 +47,7 @@ final class RedmineBridge
             $contactUpsertPath,
             $logger,
         );
+        $this->contactService = new RedmineContactService($http, $contactUpsertPath, $logger);
     }
 
     public function crearTicket(
@@ -137,6 +140,42 @@ final class RedmineBridge
         return $this->clienteService->upsertCliente($cliente, $this->resolveContext($context));
     }
 
+    public function findContactIdByEmail(string $email, ?RequestContext $context = null): ?int
+    {
+        return $this->contactService->findContactIdByEmail($email, $this->resolveContext($context));
+    }
+
+    public function upsertContact(ContactDTO $dto, ?RequestContext $context = null): int
+    {
+        return $this->contactService->upsertContact($dto, $this->resolveContext($context));
+    }
+
+    public function crearHelpdeskTicketUsandoContacto(
+        TicketDTO $ticket,
+        string $email,
+        int $projectId,
+        int $trackerId,
+        RequestContext $context,
+        ?ContactDTO $contact = null,
+    ): array {
+        $normalizedEmail = $this->normalizeEmail($email);
+
+        $contactId = $this->contactService->findContactIdByEmail($normalizedEmail, $context);
+
+        if ($contactId === null) {
+            $resolvedContact = $this->resolveContactForEmail($contact, $normalizedEmail);
+            $contactId = $this->contactService->upsertContact($resolvedContact, $context);
+        }
+
+        return $this->ticketService->crearHelpdeskTicketUsandoContacto(
+            $ticket,
+            $contactId,
+            $projectId,
+            $trackerId,
+            $context,
+        );
+    }
+
     private function resolveContext(?RequestContext $context): RequestContext
     {
         return $context ?? RequestContext::generate();
@@ -198,5 +237,26 @@ final class RedmineBridge
         }
 
         return $items;
+    }
+
+    private function normalizeEmail(string $email): string
+    {
+        return strtolower(trim($email));
+    }
+
+    private function resolveContactForEmail(?ContactDTO $contact, string $email): ContactDTO
+    {
+        if ($contact === null) {
+            $firstName = $email !== '' ? strtok($email, '@') : null;
+            $emails = $email !== '' ? [$email] : [];
+
+            return new ContactDTO(false, $firstName !== false ? $firstName : null, null, null, $emails, [], null, []);
+        }
+
+        if ($email !== '' && !in_array($email, $contact->emails, true)) {
+            $contact->emails[] = $email;
+        }
+
+        return $contact;
     }
 }

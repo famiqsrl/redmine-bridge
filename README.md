@@ -145,3 +145,45 @@ cualquier cliente PSR-18.
 ## Licencia
 
 MIT
+
+## Opt-in Contacts
+
+Esta sección agrega soporte opt-in para el plugin Contacts (CRM) y permite crear
+helpdesk tickets reutilizando contactos por email.
+
+```php
+use Famiq\RedmineBridge\DTO\ContactDTO;
+use Famiq\RedmineBridge\DTO\TicketDTO;
+use Famiq\RedmineBridge\RedmineBridge;
+use Famiq\RedmineBridge\RequestContext;
+
+$bridge = new RedmineBridge($config, $client);
+$context = RequestContext::generate();
+
+$contactId = $bridge->findContactIdByEmail('cliente@example.com', $context);
+
+$contact = new ContactDTO(
+    false,
+    'Ada',
+    'Lovelace',
+    null,
+    ['cliente@example.com'],
+    ['+54 11 5555 5555'],
+    'Av. Siempre Viva 742',
+    [
+        ['id' => 10, 'value' => 'premium'],
+    ],
+);
+
+$contactId = $bridge->upsertContact($contact, $context);
+
+$ticket = new TicketDTO('Consulta', 'Detalle del problema');
+$result = $bridge->crearHelpdeskTicketUsandoContacto(
+    $ticket,
+    'cliente@example.com',
+    1,
+    2,
+    $context,
+    $contact,
+);
+```

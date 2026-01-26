@@ -137,6 +137,120 @@ final class RedmineBridge
         return $this->clienteService->upsertCliente($cliente, $this->resolveContext($context));
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerIssueConDetalles(string|int $issueId, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->obtenerIssueConDetalles($issueId, $this->resolveContext($context));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerIssueBasico(string|int $issueId, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->obtenerIssueBasico($issueId, $this->resolveContext($context));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function actualizarIssueSubject(string|int $issueId, string $subject, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->actualizarIssueSubject($issueId, $subject, $this->resolveContext($context));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function asignarContactoAIssue(string|int $issueId, int $contactId, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->asignarContactoAIssue($issueId, $contactId, $this->resolveContext($context));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function asociarIssueAContacto(int $contactId, string|int $issueId, ?RequestContext $context = null): array
+    {
+        return $this->clienteService->asociarIssueAContacto($contactId, $issueId, $this->resolveContext($context));
+    }
+
+    /**
+     * @param array<int, mixed> $customFields
+     * @return array<string, mixed>
+     */
+    public function crearIssueCore(
+        int $projectId,
+        int $trackerId,
+        string $subject,
+        string $description,
+        array $customFields = [],
+        ?RequestContext $context = null,
+    ): array {
+        return $this->ticketService->crearIssueCore(
+            $projectId,
+            $trackerId,
+            $subject,
+            $description,
+            $customFields,
+            $this->resolveContext($context),
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function buscarContactos(
+        string $search,
+        int $limit = 100,
+        int $offset = 0,
+        ?RequestContext $context = null,
+    ): array {
+        return $this->clienteService->buscarContactos($search, $limit, $offset, $this->resolveContext($context));
+    }
+
+    /**
+     * @param array<string, mixed> $contactPayload
+     * @return array<string, mixed>
+     */
+    public function crearContacto(array $contactPayload, ?RequestContext $context = null): array
+    {
+        return $this->clienteService->crearContacto($contactPayload, $this->resolveContext($context));
+    }
+
+    /**
+     * @param array<string, mixed> $contactPayload
+     * @return array<string, mixed>
+     */
+    public function actualizarContacto(int $contactId, array $contactPayload, ?RequestContext $context = null): array
+    {
+        return $this->clienteService->actualizarContacto($contactId, $contactPayload, $this->resolveContext($context));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerAttachmentInfo(int $attachmentId, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->obtenerAttachmentInfo($attachmentId, $this->resolveContext($context));
+    }
+
+    public function descargarContenido(string $url, ?RequestContext $context = null): string
+    {
+        return $this->ticketService->descargarContenido($url, $this->resolveContext($context));
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    public function crearHelpdeskTicketRaw(array $payload, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->crearHelpdeskTicketRaw($payload, $this->resolveContext($context));
+    }
+
     private function resolveContext(?RequestContext $context): RequestContext
     {
         return $context ?? RequestContext::generate();

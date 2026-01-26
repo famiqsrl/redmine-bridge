@@ -35,7 +35,67 @@ final class RedmineHttpClient
      */
     public function request(string $method, string $path, array|string|null $body, array $headers, ?RequestContext $context): array
     {
-        $url = $this->buildUrl($path);
+        $url = $this->resolveUrl($path);
+        $request = $this->createRequest($method, $url, $body, $headers, $context);
+
+        $this->logger->info('redmine.request', [
+            'method' => $method,
+            'url' => $url,
+            'correlation_id' => $context?->correlationId,
+        ]);
+
+        try {
+            $response = $this->client->sendRequest($request);
+        } catch (ClientExceptionInterface $exception) {
+            $this->logger->error('redmine.transport_error', [
+                'message' => $exception->getMessage(),
+                'correlation_id' => $context?->correlationId,
+            ]);
+            throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $this->handleResponse($response, $context);
+    }
+
+    /**
+     * @param array<string, mixed>|string|null $body
+     * @param array<string, string> $headers
+     */
+    public function requestRaw(string $method, string $path, array|string|null $body, array $headers, ?RequestContext $context): string
+    {
+        $url = $this->resolveUrl($path);
+        $request = $this->createRequest($method, $url, $body, $headers, $context);
+
+        $this->logger->info('redmine.request', [
+            'method' => $method,
+            'url' => $url,
+            'correlation_id' => $context?->correlationId,
+        ]);
+
+        try {
+            $response = $this->client->sendRequest($request);
+        } catch (ClientExceptionInterface $exception) {
+            $this->logger->error('redmine.transport_error', [
+                'message' => $exception->getMessage(),
+                'correlation_id' => $context?->correlationId,
+            ]);
+            throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
+        }
+
+        return $this->handleRawResponse($response, $context);
+    }
+
+    /**
+     * @param array<string, mixed>|string|null $body
+     * @param array<string, string> $headers
+     */
+    private function createRequest(
+        string $method,
+        string $url,
+        array|string|null $body,
+        array $headers,
+        ?RequestContext $context,
+    ): \Psr\Http\Message\RequestInterface {
         $request = $this->factory->createRequest($method, $url)
             ->withHeader('Authorization', $this->buildAuthHeader())
             ->withHeader('Accept', 'application/json');
@@ -59,23 +119,16 @@ final class RedmineHttpClient
             $request = $request->withBody($stream);
         }
 
-        $this->logger->info('redmine.request', [
-            'method' => $method,
-            'url' => $url,
-            'correlation_id' => $context?->correlationId,
-        ]);
+        return $request;
+    }
 
-        try {
-            $response = $this->client->sendRequest($request);
-        } catch (ClientExceptionInterface $exception) {
-            $this->logger->error('redmine.transport_error', [
-                'message' => $exception->getMessage(),
-                'correlation_id' => $context?->correlationId,
-            ]);
-            throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
+    private function resolveUrl(string $path): string
+    {
+        if (str_starts_with($path, 'http://') || str_starts_with($path, 'https://')) {
+            return $path;
         }
 
-        return $this->handleResponse($response, $context);
+        return $this->buildUrl($path);
     }
 
     private function buildUrl(string $path): string
@@ -123,6 +176,28 @@ final class RedmineHttpClient
         }
 
         return $this->decodeJsonToArray($payload);
+    }
+
+    private function handleRawResponse(ResponseInterface $response, ?RequestContext $context): string
+    {
+        $status = $response->getStatusCode();
+        $payload = (string) $response->getBody();
+
+        $this->logger->info('redmine.response', [
+            'status' => $status,
+            'correlation_id' => $context?->correlationId,
+        ]);
+
+        if ($status === 401 || $status === 403) {
+            throw new RedmineAuthException('Redmine authentication failed', $status);
+        }
+
+        if ($status >= 400) {
+            $decoded = $payload !== '' ? $this->decodeJsonToArray($payload) : [];
+            throw new RedmineValidationException('Redmine request failed', $decoded, $status);
+        }
+
+        return $payload;
     }
 
     /**

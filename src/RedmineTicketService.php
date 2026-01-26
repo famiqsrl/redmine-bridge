@@ -170,6 +170,115 @@ final class RedmineTicketService
         return new CrearAdjuntoResult(null);
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerIssueConDetalles(string|int $issueId, RequestContext $context): array
+    {
+        $path = $this->buildPathWithQuery(sprintf('/issues/%s.json', $issueId), [
+            'include' => 'journals,attachments,relations,watchers',
+        ]);
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerIssueBasico(string|int $issueId, RequestContext $context): array
+    {
+        $path = $this->buildPathWithQuery(sprintf('/issues/%s.json', $issueId), [
+            'include' => 'journals,attachments',
+        ]);
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function actualizarIssueSubject(string|int $issueId, string $subject, RequestContext $context): array
+    {
+        $payload = [
+            'issue' => [
+                'subject' => $subject,
+            ],
+        ];
+
+        return $this->client->request('PUT', sprintf('/issues/%s.json', $issueId), $payload, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function asignarContactoAIssue(string|int $issueId, int $contactId, RequestContext $context): array
+    {
+        $payload = [
+            'issue' => [
+                'contact_id' => $contactId,
+            ],
+        ];
+
+        return $this->client->request('PUT', sprintf('/issues/%s.json', $issueId), $payload, [], $context);
+    }
+
+    /**
+     * @param array<int, mixed> $customFields
+     * @return array<string, mixed>
+     */
+    public function crearIssueCore(
+        int $projectId,
+        int $trackerId,
+        string $subject,
+        string $description,
+        array $customFields,
+        RequestContext $context,
+    ): array {
+        $payload = [
+            'issue' => array_filter([
+                'project_id' => $projectId,
+                'tracker_id' => $trackerId,
+                'subject' => $subject,
+                'description' => $description,
+                'custom_fields' => $this->buildCustomFields($customFields),
+            ], static fn ($value) => $value !== null && $value !== []),
+        ];
+
+        $headers = [];
+        if (!empty($context->idUsuario)) {
+            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        }
+
+        return $this->client->request('POST', '/issues.json', $payload, $headers, $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerAttachmentInfo(int $attachmentId, RequestContext $context): array
+    {
+        return $this->client->request('GET', sprintf('/attachments/%d.json', $attachmentId), null, [], $context);
+    }
+
+    public function descargarContenido(string $url, RequestContext $context): string
+    {
+        return $this->client->requestRaw('GET', $url, null, [], $context);
+    }
+
+    /**
+     * @param array<string, mixed> $payload
+     * @return array<string, mixed>
+     */
+    public function crearHelpdeskTicketRaw(array $payload, RequestContext $context): array
+    {
+        $headers = [];
+        if (!empty($context->idUsuario)) {
+            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        }
+
+        return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+    }
+
     private function resolveContent(string $content): string
     {
         if (is_file($content)) {
@@ -181,6 +290,29 @@ final class RedmineTicketService
         }
 
         return $content;
+    }
+
+    /**
+     * @param array<int, mixed> $customFields
+     * @return array<int, array<string, mixed>>
+     */
+    private function buildCustomFields(array $customFields): array
+    {
+        $fields = [];
+
+        foreach ($customFields as $id => $value) {
+            $fieldId = is_numeric($id) ? (int) $id : null;
+            if ($fieldId === null || $value === null || $value === []) {
+                continue;
+            }
+
+            $fields[] = [
+                'id' => $fieldId,
+                'value' => $value,
+            ];
+        }
+
+        return $fields;
     }
 
     /**

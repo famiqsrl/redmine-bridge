@@ -18,7 +18,7 @@ final class RedmineClienteService
     private ApiContactResolver $upsertResolver;
 
     public function __construct(
-        RedmineHttpClient $client,
+        private RedmineHttpClient $client,
         ?string $contactSearchPath,
         ?string $contactUpsertPath,
         private LoggerInterface $logger = new NullLogger(),
@@ -58,5 +58,55 @@ final class RedmineClienteService
         ]);
 
         return $this->upsertResolver->upsert($cliente, $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function buscarContactos(string $search, int $limit, int $offset, RequestContext $context): array
+    {
+        $path = '/contacts.json?' . http_build_query([
+            'limit' => $limit,
+            'offset' => $offset,
+            'search' => $search,
+        ]);
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
+     * @param array<string, mixed> $contactPayload
+     * @return array<string, mixed>
+     */
+    public function crearContacto(array $contactPayload, RequestContext $context): array
+    {
+        return $this->client->request('POST', '/contacts.json', $contactPayload, [], $context);
+    }
+
+    /**
+     * @param array<string, mixed> $contactPayload
+     * @return array<string, mixed>
+     */
+    public function actualizarContacto(int $contactId, array $contactPayload, RequestContext $context): array
+    {
+        return $this->client->request('PUT', sprintf('/contacts/%d.json', $contactId), $contactPayload, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function asociarIssueAContacto(int $contactId, string|int $issueId, RequestContext $context): array
+    {
+        $payload = [
+            'issue_id' => $issueId,
+        ];
+
+        return $this->client->request(
+            'POST',
+            sprintf('/contacts/%d/issues.json', $contactId),
+            $payload,
+            [],
+            $context,
+        );
     }
 }

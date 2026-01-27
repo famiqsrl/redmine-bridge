@@ -111,63 +111,57 @@ final class RedmineTicketService
         ?string $clienteRef,
         RequestContext $context,
     ): ListarTicketsResult {
-        $filters = [
-            'status_id' => $status,
-        ];
-
-        if ($clienteRef !== null) {
-            $customFieldId = $this->config->customFieldMap['cliente_ref'] ?? null;
-            if ($customFieldId !== null) {
-                $filters['cf_' . $customFieldId] = $clienteRef;
-            }
-        }
-
         $contactIds = $this->findContactIdsByEmpresaWithFallback($empresa, $context);
         if ($contactIds === []) {
             return new ListarTicketsResult([], 0, $page ?? 1, $perPage ?? 0);
         }
 
-        $items = [];
-        $total = 0;
-
-        if (count($contactIds) === 1) {
-            $filters['contact_id'] = $contactIds[0];
-            $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
-            $path = $this->buildPathWithQuery('/issues.json', $params);
-
-            $response = $this->client->request('GET', $path, null, [], $context);
-
-            $items = $this->normalizeIssueItems($response['issues'] ?? null);
-            $total = (int) ($response['total_count'] ?? count($items));
-        } else {
-            // Pagination across multiple contact_id requests cannot be reliably preserved.
-            $issuesById = [];
-
-            foreach ($contactIds as $contactId) {
-                $contactFilters = $filters;
-                $contactFilters['contact_id'] = $contactId;
-                $params = $this->buildTicketQueryParams($contactFilters, null, null, null);
-                $path = $this->buildPathWithQuery('/issues.json', $params);
-
-                $response = $this->client->request('GET', $path, null, [], $context);
-                $issues = $this->normalizeIssueItems($response['issues'] ?? null);
-
-                foreach ($issues as $issue) {
-                    $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
-                    if ($issueId === null) {
-                        $issuesById[] = $issue;
-                        continue;
-                    }
-                    $issuesById[(string) $issueId] = $issue;
-                }
+        $issueIdsById = [];
+        foreach ($contactIds as $contactId) {
+            foreach ($this->fetchContactTicketIds($contactId, $context) as $issueId) {
+                $issueIdsById[(string) $issueId] = $issueId;
             }
-
-            $items = array_values($issuesById);
-            $total = count($items);
         }
 
+        if ($issueIdsById === []) {
+            return new ListarTicketsResult([], 0, $page ?? 1, $perPage ?? 0);
+        }
+
+        $issueCache = [];
+        $items = [];
+        $projectId = $this->resolveOptionalContextFilter($context, 'projectId');
+        $trackerId = $this->resolveOptionalContextFilter($context, 'trackerId');
+
+        foreach ($issueIdsById as $issueId) {
+            if (!array_key_exists($issueId, $issueCache)) {
+                $issueCache[$issueId] = $this->fetchTicketDetails((int) $issueId, $context);
+            }
+            $ticket = $issueCache[$issueId];
+            if ($ticket === []) {
+                continue;
+            }
+
+            if (!$this->ticketMatchesFilters($ticket, $status, $projectId, $trackerId, $clienteRef)) {
+                continue;
+            }
+
+            $items[] = $ticket;
+        }
+
+        usort(
+            $items,
+            static fn (array $left, array $right): int => (int) ($right['id'] ?? 0) <=> (int) ($left['id'] ?? 0),
+        );
+
         $page = $page ?? 1;
-        $perPage = $perPage ?? count($items);
+        $total = count($items);
+
+        if ($perPage === null) {
+            $perPage = $total;
+        } else {
+            $offset = max(0, ($page - 1) * $perPage);
+            $items = array_slice($items, $offset, $perPage);
+        }
 
         return new ListarTicketsResult($items, $total, $page, $perPage);
     }
@@ -588,6 +582,200 @@ final class RedmineTicketService
         }
 
         return $normalized;
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function fetchContactTicketIds(int $contactId, RequestContext $context): array
+    {
+        $path = $this->buildPathWithQuery(sprintf('/contacts/%d.json', $contactId), [
+            'include' => 'tickets',
+        ]);
+
+        $response = $this->client->request('GET', $path, null, [], $context);
+        $contact = $response['contact'] ?? null;
+        if (!is_array($contact)) {
+            return [];
+        }
+
+        return $this->extractIssueIdsFromContactTickets($contact['tickets'] ?? null);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function extractIssueIdsFromContactTickets(mixed $tickets): array
+    {
+        if (!is_array($tickets)) {
+            return [];
+        }
+
+        $ids = [];
+        foreach ($tickets as $ticket) {
+            if (!is_array($ticket)) {
+                continue;
+            }
+
+            $issueId = $ticket['issue_id'] ?? $ticket['id'] ?? null;
+            if ($issueId === null || !is_numeric($issueId)) {
+                continue;
+            }
+
+            $ids[(int) $issueId] = (int) $issueId;
+        }
+
+        return array_values($ids);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchTicketDetails(int $issueId, RequestContext $context): array
+    {
+        $ticket = $this->fetchHelpdeskTicketDetails($issueId, $context);
+        if ($ticket !== [] && $this->isUsableTicketArray($ticket)) {
+            return $ticket;
+        }
+
+        return $this->fetchIssueDetails($issueId, $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchHelpdeskTicketDetails(int $issueId, RequestContext $context): array
+    {
+        $response = $this->client->request('GET', sprintf('/helpdesk_tickets/%d.json', $issueId), null, [], $context);
+        $ticket = $response['helpdesk_ticket'] ?? null;
+        if (!is_array($ticket)) {
+            return [];
+        }
+
+        $issue = $ticket['issue'] ?? null;
+        if (is_array($issue)) {
+            return $issue;
+        }
+
+        return $ticket;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function fetchIssueDetails(int $issueId, RequestContext $context): array
+    {
+        $response = $this->client->request('GET', sprintf('/issues/%d.json', $issueId), null, [], $context);
+        $issue = $response['issue'] ?? null;
+
+        return is_array($issue) ? $issue : [];
+    }
+
+    /**
+     * @param array<string, mixed> $ticket
+     */
+    private function isUsableTicketArray(array $ticket): bool
+    {
+        return array_key_exists('id', $ticket);
+    }
+
+    /**
+     * @param array<string, mixed> $ticket
+     */
+    private function ticketMatchesFilters(
+        array $ticket,
+        ?string $status,
+        ?int $projectId,
+        ?int $trackerId,
+        ?string $clienteRef,
+    ): bool {
+        if ($status !== null && (string) $this->extractIdFromNestedArray($ticket, 'status') !== (string) $status) {
+            return false;
+        }
+
+        if ($projectId !== null && $this->extractIdFromNestedArray($ticket, 'project') !== $projectId) {
+            return false;
+        }
+
+        if ($trackerId !== null && $this->extractIdFromNestedArray($ticket, 'tracker') !== $trackerId) {
+            return false;
+        }
+
+        if ($clienteRef !== null) {
+            $customFieldId = $this->config->customFieldMap['cliente_ref'] ?? null;
+            if ($customFieldId !== null) {
+                $value = $this->findCustomFieldValue($ticket, $customFieldId);
+                if ($value === null) {
+                    return false;
+                }
+
+                if (is_array($value)) {
+                    if (!in_array((string) $clienteRef, array_map('strval', $value), true)) {
+                        return false;
+                    }
+                } elseif ((string) $value !== (string) $clienteRef) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * @param array<string, mixed> $ticket
+     */
+    private function extractIdFromNestedArray(array $ticket, string $key): ?int
+    {
+        $nested = $ticket[$key] ?? null;
+        if (is_array($nested) && array_key_exists('id', $nested) && is_numeric($nested['id'])) {
+            return (int) $nested['id'];
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, mixed> $ticket
+     */
+    private function findCustomFieldValue(array $ticket, int $customFieldId): string|array|null
+    {
+        $fields = $ticket['custom_fields'] ?? null;
+        if (!is_array($fields)) {
+            return null;
+        }
+
+        foreach ($fields as $field) {
+            if (!is_array($field)) {
+                continue;
+            }
+
+            if ((int) ($field['id'] ?? 0) !== $customFieldId) {
+                continue;
+            }
+
+            return $field['value'] ?? null;
+        }
+
+        return null;
+    }
+
+    private function resolveOptionalContextFilter(RequestContext $context, string $property): ?int
+    {
+        if (!property_exists($context, $property)) {
+            return null;
+        }
+
+        $value = $context->{$property};
+        if (is_int($value)) {
+            return $value;
+        }
+
+        if (is_numeric($value)) {
+            return (int) $value;
+        }
+
+        return null;
     }
 
     /**

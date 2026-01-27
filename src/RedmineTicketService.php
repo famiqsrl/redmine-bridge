@@ -110,9 +110,13 @@ final class RedmineTicketService
         ?int $perPage,
         ?string $clienteRef,
         RequestContext $context,
+        ?int $projectId = null,
+        ?int $trackerId = null,
     ): ListarTicketsResult {
         $filters = [
             'status_id' => $status,
+            'project_id' => $projectId,
+            'tracker_id' => $trackerId,
         ];
 
         if ($clienteRef !== null) {
@@ -130,7 +134,17 @@ final class RedmineTicketService
         $items = [];
         $total = 0;
 
-        if (count($contactIds) === 1) {
+        if ($perPage === null) {
+            $issuesById = [];
+
+            foreach ($contactIds as $contactId) {
+                $issues = $this->fetchAllIssuesByContactId($contactId, $filters, $context);
+                $this->mergeIssuesById($issuesById, $issues);
+            }
+
+            $items = array_values($issuesById);
+            $total = count($items);
+        } elseif (count($contactIds) === 1) {
             $filters['contact_id'] = $contactIds[0];
             $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
             $path = $this->buildPathWithQuery('/issues.json', $params);
@@ -152,14 +166,7 @@ final class RedmineTicketService
                 $response = $this->client->request('GET', $path, null, [], $context);
                 $issues = $this->normalizeIssueItems($response['issues'] ?? null);
 
-                foreach ($issues as $issue) {
-                    $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
-                    if ($issueId === null) {
-                        $issuesById[] = $issue;
-                        continue;
-                    }
-                    $issuesById[(string) $issueId] = $issue;
-                }
+                $this->mergeIssuesById($issuesById, $issues);
             }
 
             $items = array_values($issuesById);
@@ -593,34 +600,30 @@ final class RedmineTicketService
     /**
      * @return array<int, int>
      */
-    private function findContactIdsByCompany(string $empresa, RequestContext $context): array
-    {
-        $contacts = $this->fetchContactsBySearch($empresa, $context);
-
-        return $this->filterContactIdsByField($contacts, 'company', $empresa);
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function findContactIdsByFirstName(string $empresa, RequestContext $context): array
-    {
-        $contacts = $this->fetchContactsBySearch($empresa, $context);
-
-        return $this->filterContactIdsByField($contacts, 'first_name', $empresa);
-    }
-
-    /**
-     * @return array<int, int>
-     */
     private function findContactIdsByEmpresaWithFallback(string $empresa, RequestContext $context): array
     {
-        $ids = $this->findContactIdsByCompany($empresa, $context);
-        if ($ids !== []) {
-            return $ids;
+        $contacts = $this->fetchContactsBySearch($empresa, $context);
+        $normalizedEmpresa = $this->normalizeContactValue($empresa);
+        if ($normalizedEmpresa === '') {
+            return [];
         }
 
-        return $this->findContactIdsByFirstName($empresa, $context);
+        $exactCompany = $this->filterContactIdsByMatch($contacts, ['company'], $normalizedEmpresa, true);
+        if ($exactCompany !== []) {
+            return $exactCompany;
+        }
+
+        $exactName = $this->filterContactIdsByMatch($contacts, ['name', 'first_name'], $normalizedEmpresa, true);
+        if ($exactName !== []) {
+            return $exactName;
+        }
+
+        $containsCompany = $this->filterContactIdsByMatch($contacts, ['company'], $normalizedEmpresa, false);
+        if ($containsCompany !== []) {
+            return $containsCompany;
+        }
+
+        return $this->filterContactIdsByMatch($contacts, ['name', 'first_name'], $normalizedEmpresa, false);
     }
 
     /**
@@ -641,28 +644,136 @@ final class RedmineTicketService
 
     /**
      * @param array<int, mixed> $contacts
+     * @param array<int, string> $fields
      * @return array<int, int>
      */
-    private function filterContactIdsByField(array $contacts, string $field, string $empresa): array
+    private function filterContactIdsByMatch(array $contacts, array $fields, string $normalizedEmpresa, bool $exact): array
     {
-        $ids = [];
+        $companyIds = [];
+        $personIds = [];
 
         foreach ($contacts as $contact) {
             if (!is_array($contact)) {
                 continue;
             }
 
-            $value = isset($contact[$field]) ? (string) $contact[$field] : null;
-            if ($value === null || $value !== $empresa) {
+            $id = isset($contact['id']) ? (int) $contact['id'] : null;
+            if ($id === null) {
                 continue;
             }
 
-            $id = isset($contact['id']) ? (int) $contact['id'] : null;
-            if ($id !== null) {
-                $ids[$id] = $id;
+            $matches = false;
+            foreach ($fields as $field) {
+                $value = isset($contact[$field]) ? (string) $contact[$field] : null;
+                if ($this->matchesNormalizedValue($value, $normalizedEmpresa, $exact)) {
+                    $matches = true;
+                    break;
+                }
+            }
+
+            if (!$matches) {
+                continue;
+            }
+
+            $isCompany = ($contact['is_company'] ?? false) === true;
+            if ($isCompany) {
+                $companyIds[$id] = $id;
+            } else {
+                $personIds[$id] = $id;
             }
         }
 
-        return array_values($ids);
+        return array_values($companyIds + $personIds);
+    }
+
+    private function normalizeContactValue(?string $value): string
+    {
+        if ($value === null) {
+            return '';
+        }
+
+        $normalized = trim($value);
+        $normalized = preg_replace('/[^\p{L}\p{N}\s]+/u', ' ', $normalized) ?? '';
+        $normalized = preg_replace('/\s+/u', ' ', $normalized) ?? '';
+        $normalized = trim($normalized);
+        if (function_exists('mb_strtolower')) {
+            $normalized = mb_strtolower($normalized);
+        } else {
+            $normalized = strtolower($normalized);
+        }
+
+        return $normalized;
+    }
+
+    private function matchesNormalizedValue(?string $value, string $normalizedNeedle, bool $exact): bool
+    {
+        if ($normalizedNeedle === '') {
+            return false;
+        }
+
+        $normalizedValue = $this->normalizeContactValue($value);
+        if ($normalizedValue === '') {
+            return false;
+        }
+
+        if ($exact) {
+            return $normalizedValue === $normalizedNeedle;
+        }
+
+        return str_contains($normalizedValue, $normalizedNeedle);
+    }
+
+    /**
+     * @param array<string, mixed> $filters
+     * @return array<int, array<string, mixed>>
+     */
+    private function fetchAllIssuesByContactId(int $contactId, array $filters, RequestContext $context): array
+    {
+        $issues = [];
+        $page = 1;
+        $limit = 100;
+        $maxPages = 200;
+
+        while ($page <= $maxPages) {
+            $contactFilters = $filters;
+            $contactFilters['contact_id'] = $contactId;
+            $params = $this->buildTicketQueryParams($contactFilters, null, $page, $limit);
+            $path = $this->buildPathWithQuery('/issues.json', $params);
+
+            $response = $this->client->request('GET', $path, null, [], $context);
+            $batch = $this->normalizeIssueItems($response['issues'] ?? null);
+
+            if ($batch === []) {
+                break;
+            }
+
+            foreach ($batch as $issue) {
+                $issues[] = $issue;
+            }
+
+            if (count($batch) < $limit) {
+                break;
+            }
+
+            $page++;
+        }
+
+        return $issues;
+    }
+
+    /**
+     * @param array<int|string, mixed> $issuesById
+     * @param array<int, array<string, mixed>> $issues
+     */
+    private function mergeIssuesById(array &$issuesById, array $issues): void
+    {
+        foreach ($issues as $issue) {
+            $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
+            if ($issueId === null) {
+                $issuesById[] = $issue;
+                continue;
+            }
+            $issuesById[(string) $issueId] = $issue;
+        }
     }
 }

@@ -111,8 +111,6 @@ final class RedmineTicketService
         ?string $clienteRef,
         RequestContext $context,
     ): ListarTicketsResult {
-        $empresa = trim($empresa);
-
         $filters = [
             'status_id' => $status,
         ];
@@ -142,8 +140,7 @@ final class RedmineTicketService
             $items = $this->normalizeIssueItems($response['issues'] ?? null);
             $total = (int) ($response['total_count'] ?? count($items));
         } else {
-            // Pagination across multiple contact_id requests cannot be reliably preserved server-side.
-            // We merge results and apply pagination locally to keep ListarTicketsResult consistent.
+            // Pagination across multiple contact_id requests cannot be reliably preserved.
             $issuesById = [];
 
             foreach ($contactIds as $contactId) {
@@ -167,12 +164,6 @@ final class RedmineTicketService
 
             $items = array_values($issuesById);
             $total = count($items);
-
-            $resolvedPage = $page ?? 1;
-            $resolvedPerPage = $perPage ?? $total;
-
-            $offset = max(0, ($resolvedPage - 1) * $resolvedPerPage);
-            $items = array_slice($items, $offset, $resolvedPerPage);
         }
 
         $page = $page ?? 1;
@@ -401,10 +392,7 @@ final class RedmineTicketService
         $issueCustomFields = $this->customFieldResolver->getIssueCustomFieldsForTracker($trackerId, $context);
         $customFieldMap = $this->customFieldResolver->getIssueCustomFieldNameToIdMapForTracker($trackerId, $context);
         $resolvedCustomFieldsById = $this->resolveCustomFieldsById($ticket->customFields, $customFieldMap);
-        $resolvedCustomFieldsById = $this->autofillRequiredCustomFields(
-            $issueCustomFields,
-            $resolvedCustomFieldsById,
-        );
+        $resolvedCustomFieldsById = $this->autofillRequiredCustomFields($issueCustomFields, $resolvedCustomFieldsById);
         $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
 
         return $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
@@ -642,7 +630,7 @@ final class RedmineTicketService
     {
         $path = $this->buildPathWithQuery('/contacts.json', [
             'search' => $empresa,
-            'limit' => 200, // reduce falsos "no hay" por paginado/limit default
+            'limit' => 200, // evita falsos "no hay" por paginado/limit default
         ]);
 
         $response = $this->client->request('GET', $path, null, [], $context);
@@ -657,7 +645,24 @@ final class RedmineTicketService
      */
     private function filterContactIdsByField(array $contacts, string $field, string $empresa): array
     {
-        $empresa = trim($empresa);
         $ids = [];
 
-        foreach
+        foreach ($contacts as $contact) {
+            if (!is_array($contact)) {
+                continue;
+            }
+
+            $value = isset($contact[$field]) ? (string) $contact[$field] : null;
+            if ($value === null || $value !== $empresa) {
+                continue;
+            }
+
+            $id = isset($contact['id']) ? (int) $contact['id'] : null;
+            if ($id !== null) {
+                $ids[$id] = $id;
+            }
+        }
+
+        return array_values($ids);
+    }
+}

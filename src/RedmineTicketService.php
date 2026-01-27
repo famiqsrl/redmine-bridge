@@ -71,7 +71,7 @@ final class RedmineTicketService
 
         $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
         $issue = $response['helpdesk_ticket'] ?? null;
-      
+
         $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
 
         return new CrearTicketResult($issueId);
@@ -97,6 +97,84 @@ final class RedmineTicketService
 
         $items = $this->normalizeIssueItems($response['issues'] ?? null);
         $total = (int) ($response['total_count'] ?? count($items));
+        $page = $page ?? 1;
+        $perPage = $perPage ?? count($items);
+
+        return new ListarTicketsResult($items, $total, $page, $perPage);
+    }
+
+    public function listarTicketsPorEmpresa(
+        string $empresa,
+        ?string $status,
+        ?int $page,
+        ?int $perPage,
+        ?string $clienteRef,
+        RequestContext $context,
+    ): ListarTicketsResult {
+        $empresa = trim($empresa);
+
+        $filters = [
+            'status_id' => $status,
+        ];
+
+        if ($clienteRef !== null) {
+            $customFieldId = $this->config->customFieldMap['cliente_ref'] ?? null;
+            if ($customFieldId !== null) {
+                $filters['cf_' . $customFieldId] = $clienteRef;
+            }
+        }
+
+        $contactIds = $this->findContactIdsByEmpresaWithFallback($empresa, $context);
+        if ($contactIds === []) {
+            return new ListarTicketsResult([], 0, $page ?? 1, $perPage ?? 0);
+        }
+
+        $items = [];
+        $total = 0;
+
+        if (count($contactIds) === 1) {
+            $filters['contact_id'] = $contactIds[0];
+            $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
+            $path = $this->buildPathWithQuery('/issues.json', $params);
+
+            $response = $this->client->request('GET', $path, null, [], $context);
+
+            $items = $this->normalizeIssueItems($response['issues'] ?? null);
+            $total = (int) ($response['total_count'] ?? count($items));
+        } else {
+            // Pagination across multiple contact_id requests cannot be reliably preserved server-side.
+            // We merge results and apply pagination locally to keep ListarTicketsResult consistent.
+            $issuesById = [];
+
+            foreach ($contactIds as $contactId) {
+                $contactFilters = $filters;
+                $contactFilters['contact_id'] = $contactId;
+                $params = $this->buildTicketQueryParams($contactFilters, null, null, null);
+                $path = $this->buildPathWithQuery('/issues.json', $params);
+
+                $response = $this->client->request('GET', $path, null, [], $context);
+                $issues = $this->normalizeIssueItems($response['issues'] ?? null);
+
+                foreach ($issues as $issue) {
+                    $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
+                    if ($issueId === null) {
+                        $issuesById[] = $issue;
+                        continue;
+                    }
+                    $issuesById[(string) $issueId] = $issue;
+                }
+            }
+
+            $items = array_values($issuesById);
+            $total = count($items);
+
+            $resolvedPage = $page ?? 1;
+            $resolvedPerPage = $perPage ?? $total;
+
+            $offset = max(0, ($resolvedPage - 1) * $resolvedPerPage);
+            $items = array_slice($items, $offset, $resolvedPerPage);
+        }
+
         $page = $page ?? 1;
         $perPage = $perPage ?? count($items);
 
@@ -523,4 +601,63 @@ final class RedmineTicketService
 
         return $normalized;
     }
-}
+
+    /**
+     * @return array<int, int>
+     */
+    private function findContactIdsByCompany(string $empresa, RequestContext $context): array
+    {
+        $contacts = $this->fetchContactsBySearch($empresa, $context);
+
+        return $this->filterContactIdsByField($contacts, 'company', $empresa);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function findContactIdsByFirstName(string $empresa, RequestContext $context): array
+    {
+        $contacts = $this->fetchContactsBySearch($empresa, $context);
+
+        return $this->filterContactIdsByField($contacts, 'first_name', $empresa);
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private function findContactIdsByEmpresaWithFallback(string $empresa, RequestContext $context): array
+    {
+        $ids = $this->findContactIdsByCompany($empresa, $context);
+        if ($ids !== []) {
+            return $ids;
+        }
+
+        return $this->findContactIdsByFirstName($empresa, $context);
+    }
+
+    /**
+     * @return array<int, mixed>
+     */
+    private function fetchContactsBySearch(string $empresa, RequestContext $context): array
+    {
+        $path = $this->buildPathWithQuery('/contacts.json', [
+            'search' => $empresa,
+            'limit' => 200, // reduce falsos "no hay" por paginado/limit default
+        ]);
+
+        $response = $this->client->request('GET', $path, null, [], $context);
+        $contacts = $response['contacts'] ?? null;
+
+        return is_array($contacts) ? $contacts : [];
+    }
+
+    /**
+     * @param array<int, mixed> $contacts
+     * @return array<int, int>
+     */
+    private function filterContactIdsByField(array $contacts, string $field, string $empresa): array
+    {
+        $empresa = trim($empresa);
+        $ids = [];
+
+        foreach

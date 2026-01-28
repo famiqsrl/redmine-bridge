@@ -90,9 +90,10 @@ final class RedmineBridge
         ?int $page = null,
         ?int $perPage = null,
         ?string $clienteRef = null,
+        ?string $empresa = null,
         ?RequestContext $context = null,
     ): ListarTicketsResult {
-        return $this->ticketService->listarTickets($status, $page, $perPage, $clienteRef, $this->resolveContext($context));
+        return $this->ticketService->listarTickets($status, $page, $perPage, $clienteRef, $empresa, $this->resolveContext($context));
     }
 
     /**

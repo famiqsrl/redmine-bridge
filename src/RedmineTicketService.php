@@ -77,8 +77,14 @@ final class RedmineTicketService
         return new CrearTicketResult($issueId);
     }
 
-    public function listarTickets(?string $status, ?int $page, ?int $perPage, ?string $clienteRef, RequestContext $context): ListarTicketsResult
-    {
+    public function listarTickets(
+        ?string $status,
+        ?int $page,
+        ?int $perPage,
+        ?string $clienteRef,
+        ?string $empresa,
+        RequestContext $context,
+    ): ListarTicketsResult {
         $filters = [
             'status_id' => $status,
         ];
@@ -88,6 +94,10 @@ final class RedmineTicketService
             if ($customFieldId !== null) {
                 $filters['cf_' . $customFieldId] = $clienteRef;
             }
+        }
+
+        if ($empresa !== null) {
+            return $this->listarTicketsConFiltroEmpresa($filters, $empresa, $page, $perPage, $context);
         }
 
         $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
@@ -103,32 +113,21 @@ final class RedmineTicketService
         return new ListarTicketsResult($items, $total, $page, $perPage);
     }
 
-    public function listarTicketsPorEmpresa(
+    /**
+     * @param array<string, mixed> $filters
+     */
+    private function listarTicketsConFiltroEmpresa(
+        array $filters,
         string $empresa,
-        ?string $status,
         ?int $page,
         ?int $perPage,
-        ?string $clienteRef,
         RequestContext $context,
     ): ListarTicketsResult {
-        $filters = [
-            'status_id' => $status,
-        ];
-
-        if ($clienteRef !== null) {
-            $customFieldId = $this->config->customFieldMap['cliente_ref'] ?? null;
-            if ($customFieldId !== null) {
-                $filters['cf_' . $customFieldId] = $clienteRef;
-            }
-        }
-
         $contactIds = $this->findContactIdsByEmpresaWithFallback($empresa, $context);
+
         if ($contactIds === []) {
             return new ListarTicketsResult([], 0, $page ?? 1, $perPage ?? 0);
         }
-
-        $items = [];
-        $total = 0;
 
         if (count($contactIds) === 1) {
             $filters['contact_id'] = $contactIds[0];
@@ -139,37 +138,35 @@ final class RedmineTicketService
 
             $items = $this->normalizeIssueItems($response['issues'] ?? null);
             $total = (int) ($response['total_count'] ?? count($items));
-        } else {
-            // Pagination across multiple contact_id requests cannot be reliably preserved.
-            $issuesById = [];
 
-            foreach ($contactIds as $contactId) {
-                $contactFilters = $filters;
-                $contactFilters['contact_id'] = $contactId;
-                $params = $this->buildTicketQueryParams($contactFilters, null, null, null);
-                $path = $this->buildPathWithQuery('/issues.json', $params);
-
-                $response = $this->client->request('GET', $path, null, [], $context);
-                $issues = $this->normalizeIssueItems($response['issues'] ?? null);
-
-                foreach ($issues as $issue) {
-                    $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
-                    if ($issueId === null) {
-                        $issuesById[] = $issue;
-                        continue;
-                    }
-                    $issuesById[(string) $issueId] = $issue;
-                }
-            }
-
-            $items = array_values($issuesById);
-            $total = count($items);
+            return new ListarTicketsResult($items, $total, $page ?? 1, $perPage ?? count($items));
         }
 
-        $page = $page ?? 1;
-        $perPage = $perPage ?? count($items);
+        $issuesById = [];
 
-        return new ListarTicketsResult($items, $total, $page, $perPage);
+        foreach ($contactIds as $contactId) {
+            $contactFilters = $filters;
+            $contactFilters['contact_id'] = $contactId;
+            $params = $this->buildTicketQueryParams($contactFilters, null, null, null);
+            $path = $this->buildPathWithQuery('/issues.json', $params);
+
+            $response = $this->client->request('GET', $path, null, [], $context);
+            $issues = $this->normalizeIssueItems($response['issues'] ?? null);
+
+            foreach ($issues as $issue) {
+                $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
+                if ($issueId === null) {
+                    $issuesById[] = $issue;
+                    continue;
+                }
+                $issuesById[(string) $issueId] = $issue;
+            }
+        }
+
+        $items = array_values($issuesById);
+        $total = count($items);
+
+        return new ListarTicketsResult($items, $total, $page ?? 1, $perPage ?? count($items));
     }
 
     /**

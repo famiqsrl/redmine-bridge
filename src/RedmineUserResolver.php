@@ -15,43 +15,101 @@ final class RedmineUserResolver
         private RedmineHttpClient $client,
         private RedmineConfig $config,
         private LoggerInterface $logger = new NullLogger(),
-    ) {
-    }
+    ) {}
 
     /**
-     * Resolves a user for ticket creation. Returns the login to use for
-     * X-Redmine-Switch-User and any extra description text for external users.
-     *
      * @return array{login: ?string, extraDescription: ?string}
      */
-    public function resolveUserForTicket(RequestContext $context): array
+    public function resolveUserForTicket(\Famiq\RedmineBridge\RequestContext $context): array
     {
-        if (empty($context->idUsuario)) {
+        $login = $context->idUsuario ? trim((string) $context->idUsuario) : '';
+        $email = $context->emailUsuario ? trim((string) $context->emailUsuario) : '';
+        $nombre = $context->nombreUsuario ? trim((string) $context->nombreUsuario) : '';
+        $apellido = $context->apellidoUsuario ? trim((string) $context->apellidoUsuario) : '';
+
+        if ($login === '') {
+            // Sin login no hay switch-user
             return ['login' => null, 'extraDescription' => null];
         }
 
-        if ($this->userExists($context->idUsuario, $context)) {
-            return ['login' => $context->idUsuario, 'extraDescription' => null];
+        $isInternal = false;
+        if ($email !== '' && str_contains($email, '@')) {
+            $domain = strtolower(substr(strrchr($email, '@') ?: '', 1));
+            $isInternal = $domain === strtolower($this->config->internalEmailDomain);
         }
 
-        $email = $context->emailUsuario;
-
-        if ($email !== null && $this->isInternalEmail($email)) {
-            $this->createUser($context);
-
-            return ['login' => $context->idUsuario, 'extraDescription' => null];
+        // 1) Si el usuario existe en Redmine → usamos switch-user
+        try {
+            // OJO: en Redmine API estándar es /users.json (requiere permisos).
+            // Si tu Redmine no permite listar usuarios, esto puede fallar.
+            $res = $this->client->request('GET', '/users.json?name=' . rawurlencode($login) . '&limit=1', null, [], $context);
+            $users = $res['users'] ?? [];
+            if (is_array($users) && isset($users[0]['login']) && (string) $users[0]['login'] === $login) {
+                return ['login' => $login, 'extraDescription' => null];
+            }
+        } catch (\Throwable $e) {
+            // Si no se puede consultar usuarios, NO forzamos switch-user a ciegas
+            $this->logger->warning('redmine.userResolver.user_lookup_failed', [
+                'correlation_id' => $context->correlationId,
+                'login' => $login,
+                'error' => get_class($e),
+                'message' => $e->getMessage(),
+                'code' => $e->getCode(),
+            ]);
         }
 
-        $this->logger->info('redmine.user_fallback', [
-            'original_user' => $context->idUsuario,
-            'fallback_user' => $this->config->fallbackUserLogin,
-            'correlation_id' => $context->correlationId,
-        ]);
+        // 2) Si es interno, intentamos crear usuario (si tenés permisos)
+        if ($isInternal) {
+            try {
+                // Si no tenés lastname/nombre, igual mandamos algo válido
+                $firstName = $nombre !== '' ? $nombre : $login;
+                $lastName = $apellido !== '' ? $apellido : 'PIN';
 
-        $extraDescription = $this->buildExternalUserDescription($context);
+                $payload = [
+                    'user' => [
+                        'login' => $login,
+                        'firstname' => $firstName,
+                        'lastname' => $lastName,
+                        'mail' => $email !== '' ? $email : ($login . '@' . $this->config->internalEmailDomain),
+                        // Si tu Redmine requiere password, esto puede fallar.
+                        // Si usa LDAP, puede que NO se permitan passwords acá.
+                        'password' => bin2hex(random_bytes(8)),
+                    ],
+                ];
 
-        return ['login' => $this->config->fallbackUserLogin, 'extraDescription' => $extraDescription];
+                $this->client->request('POST', '/users.json', $payload, [], $context);
+
+                // Si creó OK, usamos switch-user
+                return ['login' => $login, 'extraDescription' => null];
+            } catch (\Throwable $e) {
+                // Si no pudo crear, NO devolvemos login (evita 404 por switch-user a user inexistente)
+                $this->logger->error('redmine.userResolver.user_create_failed', [
+                    'correlation_id' => $context->correlationId,
+                    'login' => $login,
+                    'email' => $email,
+                    'error' => get_class($e),
+                    'message' => $e->getMessage(),
+                    'code' => $e->getCode(),
+                    'errors' => property_exists($e, 'errors') ? $e->errors : null,
+                ]);
+                return ['login' => null, 'extraDescription' => null];
+            }
+        }
+
+        // 3) Externo: ticket a nombre de fallbackUserLogin (si querés forzarlo)
+        $extra = null;
+        if ($email !== '' || $nombre !== '' || $apellido !== '') {
+            $extra = "Contacto:\n"
+                . "Nombre: " . trim($nombre . ' ' . $apellido) . "\n"
+                . "Email: " . ($email !== '' ? $email : '-') . "\n"
+                . "Login: " . $login;
+        }
+
+        // Si querés que sea a nombre de redminecrm, devolvés el fallback login.
+        // Si tu Redmine NO permite impersonation, poné null acá.
+        return ['login' => $this->config->fallbackUserLogin ?: null, 'extraDescription' => $extra];
     }
+
 
     private function userExists(string $login, RequestContext $context): bool
     {

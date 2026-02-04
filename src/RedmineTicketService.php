@@ -115,11 +115,15 @@ final class RedmineTicketService
             }
         }
 
+        $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
+
         if ($empresa !== null) {
-            return $this->listarTicketsConFiltroEmpresa($filters, $empresa, $page, $perPage, $context);
+            $params['set_filter'] = 1;
+            $params['f[]'] = 'customer_company';
+            $params['op[customer_company]'] = '=';
+            $params['v[customer_company][]'] = $empresa;
         }
 
-        $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
         $path = $this->buildPathWithQuery('/issues.json', $params);
 
         $response = $this->client->request('GET', $path, null, [], $context);
@@ -130,62 +134,6 @@ final class RedmineTicketService
         $perPage = $perPage ?? count($items);
 
         return new ListarTicketsResult($items, $total, $page, $perPage);
-    }
-
-    /**
-     * @param array<string, mixed> $filters
-     */
-    private function listarTicketsConFiltroEmpresa(
-        array $filters,
-        string $empresa,
-        ?int $page,
-        ?int $perPage,
-        RequestContext $context,
-    ): ListarTicketsResult {
-        $contactIds = $this->findContactIdsByEmpresaWithFallback($empresa, $context);
-
-        if ($contactIds === []) {
-            return new ListarTicketsResult([], 0, $page ?? 1, $perPage ?? 0);
-        }
-
-        if (count($contactIds) === 1) {
-            $filters['contact_id'] = $contactIds[0];
-            $params = $this->buildTicketQueryParams($filters, null, $page, $perPage);
-            $path = $this->buildPathWithQuery('/issues.json', $params);
-
-            $response = $this->client->request('GET', $path, null, [], $context);
-
-            $items = $this->normalizeIssueItems($response['issues'] ?? null);
-            $total = (int) ($response['total_count'] ?? count($items));
-
-            return new ListarTicketsResult($items, $total, $page ?? 1, $perPage ?? count($items));
-        }
-
-        $issuesById = [];
-
-        foreach ($contactIds as $contactId) {
-            $contactFilters = $filters;
-            $contactFilters['contact_id'] = $contactId;
-            $params = $this->buildTicketQueryParams($contactFilters, null, null, null);
-            $path = $this->buildPathWithQuery('/issues.json', $params);
-
-            $response = $this->client->request('GET', $path, null, [], $context);
-            $issues = $this->normalizeIssueItems($response['issues'] ?? null);
-
-            foreach ($issues as $issue) {
-                $issueId = is_array($issue) ? ($issue['id'] ?? null) : null;
-                if ($issueId === null) {
-                    $issuesById[] = $issue;
-                    continue;
-                }
-                $issuesById[(string) $issueId] = $issue;
-            }
-        }
-
-        $items = array_values($issuesById);
-        $total = count($items);
-
-        return new ListarTicketsResult($items, $total, $page ?? 1, $perPage ?? count($items));
     }
 
     /**
@@ -643,79 +591,4 @@ final class RedmineTicketService
         return $normalized;
     }
 
-    /**
-     * @return array<int, int>
-     */
-    private function findContactIdsByCompany(string $empresa, RequestContext $context): array
-    {
-        $contacts = $this->fetchContactsBySearch($empresa, $context);
-
-        return $this->filterContactIdsByField($contacts, 'company', $empresa);
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function findContactIdsByFirstName(string $empresa, RequestContext $context): array
-    {
-        $contacts = $this->fetchContactsBySearch($empresa, $context);
-
-        return $this->filterContactIdsByField($contacts, 'first_name', $empresa);
-    }
-
-    /**
-     * @return array<int, int>
-     */
-    private function findContactIdsByEmpresaWithFallback(string $empresa, RequestContext $context): array
-    {
-        $ids = $this->findContactIdsByCompany($empresa, $context);
-        if ($ids !== []) {
-            return $ids;
-        }
-
-        return $this->findContactIdsByFirstName($empresa, $context);
-    }
-
-    /**
-     * @return array<int, mixed>
-     */
-    private function fetchContactsBySearch(string $empresa, RequestContext $context): array
-    {
-        $path = $this->buildPathWithQuery('/contacts.json', [
-            'search' => $empresa,
-            'limit' => 200, // evita falsos "no hay" por paginado/limit default
-        ]);
-
-        $response = $this->client->request('GET', $path, null, [], $context);
-        $contacts = $response['contacts'] ?? null;
-
-        return is_array($contacts) ? $contacts : [];
-    }
-
-    /**
-     * @param array<int, mixed> $contacts
-     * @return array<int, int>
-     */
-    private function filterContactIdsByField(array $contacts, string $field, string $empresa): array
-    {
-        $ids = [];
-
-        foreach ($contacts as $contact) {
-            if (!is_array($contact)) {
-                continue;
-            }
-
-            $value = isset($contact[$field]) ? (string) $contact[$field] : null;
-            if ($value === null || $value !== $empresa) {
-                continue;
-            }
-
-            $id = isset($contact['id']) ? (int) $contact['id'] : null;
-            if ($id !== null) {
-                $ids[$id] = $id;
-            }
-        }
-
-        return array_values($ids);
-    }
 }

@@ -9,6 +9,9 @@ final class RequestContext
     public function __construct(
         public string $correlationId,
         public ?string $idUsuario = null,
+        public ?string $emailUsuario = null,
+        public ?string $nombreUsuario = null,
+        public ?string $apellidoUsuario = null,
     ) {
     }
 

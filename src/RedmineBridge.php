@@ -38,7 +38,8 @@ final class RedmineBridge
         $mapper = new RedminePayloadMapper();
         $customFieldResolver = new RedmineCustomFieldResolver($http);
 
-        $this->ticketService = new RedmineTicketService($http, $config, $mapper, $customFieldResolver, $logger);
+        $userResolver = new RedmineUserResolver($http, $config, $logger);
+        $this->ticketService = new RedmineTicketService($http, $config, $mapper, $customFieldResolver, $logger, $userResolver);
         $this->clienteService = new RedmineClienteService(
             $http,
             $contactSearchPath,

@@ -15,6 +15,8 @@ final class RedmineConfig
         public string $password,
         public array $customFieldMap,
         public bool $useSsl = true,
+        public string $fallbackUserLogin = 'redminecrm',
+        public string $internalEmailDomain = 'famiq.com.ar',
     ) {
     }
 }

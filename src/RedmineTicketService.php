@@ -26,16 +26,26 @@ final class RedmineTicketService
         private RedminePayloadMapper $mapper,
         private RedmineCustomFieldResolver $customFieldResolver,
         private LoggerInterface $logger = new NullLogger(),
+        private ?RedmineUserResolver $userResolver = null,
     ) {
     }
 
     public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
     {
+        $resolved = $this->resolveUser($context);
+        $login = $resolved['login'];
+        $extraDescription = $resolved['extraDescription'];
+
+        if ($extraDescription !== null) {
+            $ticket = clone $ticket;
+            $ticket->description = $ticket->description . "\n\n" . $extraDescription;
+        }
+
         $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
         $headers = [];
 
-        if (!empty($context->idUsuario)) {
-            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        if ($login !== null) {
+            $headers['X-Redmine-Switch-User'] = $login;
         }
 
         $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
@@ -53,11 +63,20 @@ final class RedmineTicketService
         RequestContext $context,
         ?array $cliente = null,
     ): CrearTicketResult {
+        $resolved = $this->resolveUser($context);
+        $login = $resolved['login'];
+        $extraDescription = $resolved['extraDescription'];
+
+        if ($extraDescription !== null) {
+            $ticket = clone $ticket;
+            $ticket->description = $ticket->description . "\n\n" . $extraDescription;
+        }
+
         $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
         $headers = [];
 
-        if (!empty($context->idUsuario)) {
-            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        if ($login !== null) {
+            $headers['X-Redmine-Switch-User'] = $login;
         }
 
         $payload = [
@@ -300,6 +319,14 @@ final class RedmineTicketService
         array $customFields,
         RequestContext $context,
     ): array {
+        $resolved = $this->resolveUser($context);
+        $login = $resolved['login'];
+        $extraDescription = $resolved['extraDescription'];
+
+        if ($extraDescription !== null) {
+            $description = $description . "\n\n" . $extraDescription;
+        }
+
         $payload = [
             'issue' => array_filter([
                 'project_id' => $projectId,
@@ -311,8 +338,8 @@ final class RedmineTicketService
         ];
 
         $headers = [];
-        if (!empty($context->idUsuario)) {
-            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        if ($login !== null) {
+            $headers['X-Redmine-Switch-User'] = $login;
         }
 
         return $this->client->request('POST', '/issues.json', $payload, $headers, $context);
@@ -337,9 +364,25 @@ final class RedmineTicketService
      */
     public function crearHelpdeskTicketRaw(array $payload, RequestContext $context): array
     {
+        $resolved = $this->resolveUser($context);
+        $login = $resolved['login'];
+        $extraDescription = $resolved['extraDescription'];
+
+        if ($extraDescription !== null) {
+            /** @var array<string, mixed> $helpdeskTicket */
+            $helpdeskTicket = $payload['helpdesk_ticket'] ?? [];
+            /** @var array<string, mixed> $issue */
+            $issue = $helpdeskTicket['issue'] ?? [];
+            $rawDescription = $issue['description'] ?? '';
+            $existing = is_string($rawDescription) ? $rawDescription : '';
+            $issue['description'] = $existing . "\n\n" . $extraDescription;
+            $helpdeskTicket['issue'] = $issue;
+            $payload['helpdesk_ticket'] = $helpdeskTicket;
+        }
+
         $headers = [];
-        if (!empty($context->idUsuario)) {
-            $headers['X-Redmine-Switch-User'] = (string) $context->idUsuario;
+        if ($login !== null) {
+            $headers['X-Redmine-Switch-User'] = $login;
         }
 
         return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
@@ -503,6 +546,19 @@ final class RedmineTicketService
         if ($missingIds !== []) {
             throw new MissingRequiredCustomFieldsException($trackerId, $missingKeys, $missingIds);
         }
+    }
+
+    /**
+     * @return array{login: ?string, extraDescription: ?string}
+     */
+    private function resolveUser(RequestContext $context): array
+    {
+        if ($this->userResolver === null || empty($context->idUsuario)) {
+            $login = !empty($context->idUsuario) ? (string) $context->idUsuario : null;
+            return ['login' => $login, 'extraDescription' => null];
+        }
+
+        return $this->userResolver->resolveUserForTicket($context);
     }
 
     private function isMissingRequiredValue(mixed $value): bool

@@ -13,6 +13,7 @@ use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\ObtenerTicketResult;
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\Exceptions\MissingRequiredCustomFieldsException;
+use Famiq\RedmineBridge\Exceptions\RedmineAuthException;
 use Famiq\RedmineBridge\Exceptions\RedmineTransportException;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Log\LoggerInterface;
@@ -20,6 +21,9 @@ use Psr\Log\NullLogger;
 
 final class RedmineTicketService
 {
+    private const CRM_PROJECT_IDENTIFIER = 'r-crm';
+    private const CRM_PROJECT_ROLE_ID = 6;
+
     public function __construct(
         private RedmineHttpClient $client,
         private RedmineConfig $config,
@@ -88,12 +92,44 @@ final class RedmineTicketService
             ],
         ];
 
-        $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
-        $issue = $response['helpdesk_ticket'] ?? null;
+        try {
+            $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
 
-        $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
+            $issue = $response['helpdesk_ticket'] ?? null;
+            $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
 
-        return new CrearTicketResult($issueId);
+            return new CrearTicketResult($issueId);
+        } catch (RedmineAuthException $e) {
+            $this->logger->warning('redmine.helpdesk.create.auth_error', [
+                'correlation_id' => $context->correlationId,
+                'switch_user' => $login,
+                'code' => $e->getCode(),
+                'message' => $e->getMessage(),
+            ]);
+
+            if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
+                $this->ensureUserHasProjectMembership(
+                    projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
+                    login: $login,
+                    roleId: self::CRM_PROJECT_ROLE_ID,
+                    context: $context
+                );
+
+                $this->logger->info('redmine.helpdesk.create.retry_after_membership', [
+                    'correlation_id' => $context->correlationId,
+                    'switch_user' => $login,
+                ]);
+
+                $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+
+                $issue = $response['helpdesk_ticket'] ?? null;
+                $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
+
+                return new CrearTicketResult($issueId);
+            }
+
+            throw $e;
+        }
     }
 
     public function listarTickets(
@@ -333,7 +369,34 @@ final class RedmineTicketService
             $headers['X-Redmine-Switch-User'] = $login;
         }
 
-        return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+        try {
+            return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+        } catch (RedmineAuthException $e) {
+            $this->logger->warning('redmine.helpdesk.raw.auth_error', [
+                'correlation_id' => $context->correlationId,
+                'switch_user' => $login,
+                'code' => $e->getCode(),
+                'message' => $e->getMessage(),
+            ]);
+
+            if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
+                $this->ensureUserHasProjectMembership(
+                    projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
+                    login: $login,
+                    roleId: self::CRM_PROJECT_ROLE_ID,
+                    context: $context
+                );
+
+                $this->logger->info('redmine.helpdesk.raw.retry_after_membership', [
+                    'correlation_id' => $context->correlationId,
+                    'switch_user' => $login,
+                ]);
+
+                return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+            }
+
+            throw $e;
+        }
     }
 
     private function resolveContent(string $content): string
@@ -591,4 +654,150 @@ final class RedmineTicketService
         return $normalized;
     }
 
+
+
+    private function shouldAutoGrantCrmMembership(string $login, RequestContext $context): bool
+    {
+        
+        return trim($login) !== '';
+    }
+
+    private function ensureUserHasProjectMembership(
+        string $projectIdentifier,
+        string $login,
+        int $roleId,
+        RequestContext $context
+    ): void {
+        $this->logger->info('redmine.crm_membership.ensure.start', [
+            'correlation_id' => $context->correlationId,
+            'login' => $login,
+            'project' => $projectIdentifier,
+            'role_id' => $roleId,
+        ]);
+
+        $userId = $this->resolveUserIdByLogin($login, $context);
+        if ($userId === null) {
+            $this->logger->error('redmine.crm_membership.ensure.user_not_found', [
+                'correlation_id' => $context->correlationId,
+                'login' => $login,
+            ]);
+            return;
+        }
+
+        if ($this->isUserMemberOfProject($projectIdentifier, $userId, $context)) {
+            $this->logger->info('redmine.crm_membership.ensure.already_member', [
+                'correlation_id' => $context->correlationId,
+                'login' => $login,
+                'user_id' => $userId,
+                'project' => $projectIdentifier,
+            ]);
+            return;
+        }
+
+        $path = sprintf('/projects/%s/memberships.json', $projectIdentifier);
+        $payload = [
+            'membership' => [
+                'user_id' => $userId,
+                'role_ids' => [$roleId],
+            ],
+        ];
+
+        $this->logger->info('redmine.crm_membership.ensure.create.start', [
+            'correlation_id' => $context->correlationId,
+            'path' => $path,
+            'user_id' => $userId,
+            'role_id' => $roleId,
+        ]);
+
+        $this->client->request('POST', $path, $payload, [], $context);
+
+        $this->logger->info('redmine.crm_membership.ensure.create.ok', [
+            'correlation_id' => $context->correlationId,
+            'user_id' => $userId,
+            'project' => $projectIdentifier,
+            'role_id' => $roleId,
+        ]);
+    }
+
+    private function resolveUserIdByLogin(string $login, RequestContext $context): ?int
+    {
+        $login = trim($login);
+        if ($login === '') {
+            return null;
+        }
+        $path = $this->buildPathWithQuery('/users.json', ['name' => $login]);
+
+        try {
+            $response = $this->client->request('GET', $path, null, [], $context);
+        } catch (\Throwable $e) {
+            $this->logger->error('redmine.user.lookup.error', [
+                'correlation_id' => $context->correlationId,
+                'login' => $login,
+                'error' => get_class($e),
+                'message' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $users = $response['users'] ?? [];
+        if (!is_array($users)) {
+            return null;
+        }
+
+        foreach ($users as $u) {
+            if (!is_array($u)) {
+                continue;
+            }
+            $uLogin = isset($u['login']) ? (string) $u['login'] : '';
+            if ($uLogin === $login) {
+                $id = isset($u['id']) ? (int) $u['id'] : 0;
+                return $id > 0 ? $id : null;
+            }
+        }
+
+        if (count($users) === 1 && is_array($users[0]) && isset($users[0]['id'])) {
+            $id = (int) $users[0]['id'];
+            return $id > 0 ? $id : null;
+        }
+
+        return null;
+    }
+
+    private function isUserMemberOfProject(string $projectIdentifier, int $userId, RequestContext $context): bool
+    {
+        $path = sprintf('/projects/%s/memberships.json', $projectIdentifier);
+
+        try {
+            $response = $this->client->request('GET', $path, null, [], $context);
+        } catch (\Throwable $e) {
+            $this->logger->error('redmine.memberships.list.error', [
+                'correlation_id' => $context->correlationId,
+                'project' => $projectIdentifier,
+                'error' => get_class($e),
+                'message' => $e->getMessage(),
+            ]);
+            return false;
+        }
+
+        $memberships = $response['memberships'] ?? [];
+        if (!is_array($memberships)) {
+            return false;
+        }
+
+        foreach ($memberships as $m) {
+            if (!is_array($m)) {
+                continue;
+            }
+            $user = $m['user'] ?? null;
+            if (!is_array($user)) {
+                continue;
+            }
+            $id = isset($user['id']) ? (int) $user['id'] : 0;
+            if ($id === $userId) {
+                return true;
+            }
+        }
+
+        return false;
+    }
 }

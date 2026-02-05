@@ -453,11 +453,10 @@ final class RedmineTicketService
     {
         $response = $this->client->request(
             'POST',
-            '/uploads.json',
+            '/uploads.json?filename=' . urlencode($filename),
             $content,
             [
                 'Content-Type' => 'application/octet-stream',
-                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
             ],
             $context,
         );

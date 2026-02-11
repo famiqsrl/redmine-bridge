@@ -451,13 +451,14 @@ final class RedmineTicketService
 
     private function uploadContent(string $content, string $filename, RequestContext $context): string
     {
+        $decodedContent = $this->decodeIfBase64($content);
+
         $response = $this->client->request(
             'POST',
-            '/uploads.json',
-            $content,
+            '/uploads.json?filename=' . urlencode($filename),
+            $decodedContent,
             [
                 'Content-Type' => 'application/octet-stream',
-                'Content-Disposition' => 'attachment; filename="' . $filename . '"',
             ],
             $context,
         );
@@ -473,6 +474,18 @@ final class RedmineTicketService
         }
 
         return $token;
+    }
+
+    private function decodeIfBase64(string $content): string
+    {
+        if (preg_match('/^[a-zA-Z0-9\/\r\n+]*={0,2}$/', $content) && base64_decode($content, true) !== false) {
+            $decoded = base64_decode($content, true);
+            if ($decoded !== false) {
+                return $decoded;
+            }
+        }
+
+        return $content;
     }
 
     /**

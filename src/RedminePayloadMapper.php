@@ -35,12 +35,18 @@ final class RedminePayloadMapper
      */
     public function messagePayload(MensajeDTO $mensaje): array
     {
-        return [
+        $payload = [
             'issue' => [
                 'notes' => $mensaje->body,
                 'private_notes' => $mensaje->visibility === 'internal',
             ],
         ];
+
+        if ($mensaje->fromAddress !== null) {
+            $payload['issue']['from_address'] = $mensaje->fromAddress;
+        }
+
+        return $payload;
     }
 
     /**

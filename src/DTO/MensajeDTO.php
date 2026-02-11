@@ -11,6 +11,7 @@ final class MensajeDTO
         public string $body,
         public string $visibility,
         public ?string $authorRef,
+        public ?string $fromAddress = null,
     ) {
     }
 }

@@ -102,6 +102,10 @@ final class RedmineHttpClient
 
         if ($context !== null) {
             $request = $request->withHeader('X-Correlation-Id', $context->correlationId);
+
+            if ($context->switchUser !== null) {
+                $request = $request->withHeader('X-Redmine-Switch-User', $context->switchUser);
+            }
         }
 
         foreach ($headers as $name => $value) {

@@ -12,6 +12,7 @@ final class RequestContext
         public ?string $emailUsuario = null,
         public ?string $nombreUsuario = null,
         public ?string $apellidoUsuario = null,
+        public ?string $switchUser = null,
     ) {
     }
 

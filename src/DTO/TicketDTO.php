@@ -8,6 +8,7 @@ final class TicketDTO
 {
     /**
      * @param array<string, mixed> $customFields
+     * @param AdjuntoInlineDTO[] $adjuntos
      */
     public function __construct(
         public string $subject,
@@ -18,6 +19,7 @@ final class TicketDTO
         public ?string $externalTicketId = null,
         public ?string $clienteRef = null,
         public array $customFields = [],
+        public array $adjuntos = [],
     ) {
     }
 }

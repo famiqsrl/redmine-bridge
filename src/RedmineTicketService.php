@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Famiq\RedmineBridge;
 
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
+use Famiq\RedmineBridge\DTO\AdjuntoInlineDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
@@ -46,6 +47,12 @@ final class RedmineTicketService
         }
 
         $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+
+        if ($ticket->adjuntos !== []) {
+            $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
+            $payload['issue']['uploads'] = $uploads;
+        }
+
         $headers = [];
 
         if ($login !== null) {
@@ -77,6 +84,12 @@ final class RedmineTicketService
         }
 
         $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+
+        if ($ticket->adjuntos !== []) {
+            $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
+            $issuePayload['issue']['uploads'] = $uploads;
+        }
+
         $headers = [];
 
         if ($login !== null) {
@@ -212,6 +225,12 @@ final class RedmineTicketService
     public function crearMensaje(MensajeDTO $mensaje, RequestContext $context): CrearMensajeResult
     {
         $payload = $this->mapper->messagePayload($mensaje);
+
+        if ($mensaje->adjuntos !== []) {
+            $uploads = $this->uploadAdjuntosInline($mensaje->adjuntos, $context);
+            $payload['issue']['uploads'] = $uploads;
+        }
+
         $this->client->request('PUT', sprintf('/issues/%d.json', $mensaje->issueId), $payload, [], $context);
 
         return new CrearMensajeResult(null);
@@ -397,6 +416,28 @@ final class RedmineTicketService
 
             throw $e;
         }
+    }
+
+    /**
+     * @param AdjuntoInlineDTO[] $adjuntos
+     * @return array<int, array<string, string>>
+     */
+    private function uploadAdjuntosInline(array $adjuntos, RequestContext $context): array
+    {
+        $uploads = [];
+
+        foreach ($adjuntos as $adjunto) {
+            $content = $this->resolveContent($adjunto->content);
+            $token = $this->uploadContent($content, $adjunto->filename, $context);
+
+            $uploads[] = [
+                'token' => $token,
+                'filename' => $adjunto->filename,
+                'content_type' => $adjunto->mime,
+            ];
+        }
+
+        return $uploads;
     }
 
     private function resolveContent(string $content): string

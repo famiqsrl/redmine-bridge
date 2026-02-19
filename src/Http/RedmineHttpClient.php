@@ -166,13 +166,24 @@ final class RedmineHttpClient
             'correlation_id' => $context?->correlationId,
         ]);
 
-        if ($status === 401 || $status === 403) {
-            throw new RedmineAuthException('Redmine authentication failed', $status);
+        if ($status === 401 || $status === 403 || $status === 412) {
+            $message = $status === 412
+                ? 'Redmine switch-user rejected (user not found or inactive)'
+                : 'Redmine authentication failed';
+            throw new RedmineAuthException($message, $status);
         }
 
         if ($status >= 400) {
             $decoded = $payload !== '' ? $this->decodeJsonToArray($payload) : [];
-            throw new RedmineValidationException('Redmine request failed', $decoded, $status);
+
+            $this->logger->error('redmine.response.error_body', [
+                'status' => $status,
+                'body_raw' => mb_substr($payload, 0, 2000),
+                'body_decoded' => $decoded,
+                'correlation_id' => $context?->correlationId,
+            ]);
+
+            throw new RedmineValidationException('Redmine request failed', $decoded, $status, $payload);
         }
 
         if ($payload === '') {
@@ -192,13 +203,24 @@ final class RedmineHttpClient
             'correlation_id' => $context?->correlationId,
         ]);
 
-        if ($status === 401 || $status === 403) {
-            throw new RedmineAuthException('Redmine authentication failed', $status);
+        if ($status === 401 || $status === 403 || $status === 412) {
+            $message = $status === 412
+                ? 'Redmine switch-user rejected (user not found or inactive)'
+                : 'Redmine authentication failed';
+            throw new RedmineAuthException($message, $status);
         }
 
         if ($status >= 400) {
             $decoded = $payload !== '' ? $this->decodeJsonToArray($payload) : [];
-            throw new RedmineValidationException('Redmine request failed', $decoded, $status);
+
+            $this->logger->error('redmine.response.error_body', [
+                'status' => $status,
+                'body_raw' => mb_substr($payload, 0, 2000),
+                'body_decoded' => $decoded,
+                'correlation_id' => $context?->correlationId,
+            ]);
+
+            throw new RedmineValidationException('Redmine request failed', $decoded, $status, $payload);
         }
 
         return $payload;

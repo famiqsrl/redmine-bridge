@@ -7,6 +7,7 @@ namespace Famiq\RedmineBridge;
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\BuscarClienteResult;
 use Famiq\RedmineBridge\DTO\ClienteDTO;
+use Famiq\RedmineBridge\DTO\ContactDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
@@ -59,13 +60,14 @@ final class RedmineBridge
 
     public function crearHelpdeskTicket(
         TicketDTO $ticket,
-        string $contactEmail,
+        string|ContactDTO $contact,
         int $projectId,
         int $trackerId,
         ?RequestContext $context = null,
         ?array $cliente = null,
     ): CrearTicketResult {
         $resolvedContext = $this->resolveContext($context);
+        $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
 
         if ($contactEmail !== '') {
             $searchResult = $this->clienteService->buscarCliente($contactEmail, null, $resolvedContext);
@@ -79,10 +81,46 @@ final class RedmineBridge
 
         return $this->ticketService->crearHelpdeskTicket(
             $ticket,
-            $contactEmail,
+            $contact,
             $projectId,
             $trackerId,
             $resolvedContext,
+        );
+    }
+
+    public function crearHelpdeskTicketConFallback(
+        TicketDTO $ticket,
+        string|ContactDTO $contact,
+        int $projectId,
+        int $trackerId,
+        ?RequestContext $context = null,
+        ?int $contactId = null,
+        ?array $cliente = null,
+    ): CrearTicketResult {
+        $resolvedContext = $this->resolveContext($context);
+        $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
+
+        if ($contactEmail !== '') {
+            try {
+                $searchResult = $this->clienteService->buscarCliente($contactEmail, null, $resolvedContext);
+                if ($searchResult->items === [] && is_array($cliente)) {
+                    $this->clienteService->upsertCliente(
+                        $this->buildClienteFromArray($cliente, $contactEmail),
+                        $resolvedContext,
+                    );
+                }
+            } catch (\Throwable) {
+                // Best-effort: don't block ticket creation if client search/upsert fails
+            }
+        }
+
+        return $this->ticketService->crearHelpdeskTicketConFallback(
+            $ticket,
+            $contact,
+            $projectId,
+            $trackerId,
+            $resolvedContext,
+            $contactId,
         );
     }
 

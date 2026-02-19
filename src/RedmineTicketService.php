@@ -6,6 +6,7 @@ namespace Famiq\RedmineBridge;
 
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\AdjuntoInlineDTO;
+use Famiq\RedmineBridge\DTO\ContactDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
@@ -46,7 +47,44 @@ final class RedmineTicketService
             $ticket->description = $ticket->description . "\n\n" . $extraDescription;
         }
 
-        $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+        try {
+            $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.crearTicket.buildIssuePayload.fallback', [
+                'correlation_id' => $context->correlationId,
+                'error' => get_class($e),
+                'message' => $e->getMessage(),
+            ]);
+            $payload = ['issue' => []];
+        }
+
+        // If buildIssuePayload could not resolve custom fields (resolver requires admin),
+        // inject them directly from the TicketDTO (which already has ID-based fields).
+        $issueBlock = $payload['issue'] ?? [];
+        if (empty($issueBlock['custom_fields']) && $ticket->customFields !== []) {
+            $directCf = [];
+            foreach ($ticket->customFields as $cf) {
+                $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
+                $value = is_array($cf) ? ($cf['value'] ?? null) : null;
+                if ($id > 0 && $value !== null) {
+                    $directCf[] = ['id' => $id, 'value' => $value];
+                }
+            }
+            if ($directCf !== []) {
+                $issueBlock['custom_fields'] = $directCf;
+            }
+        }
+
+        // Ensure basic issue fields are present
+        $issueBlock['project_id'] = $issueBlock['project_id'] ?? $projectId;
+        $issueBlock['tracker_id'] = $issueBlock['tracker_id'] ?? $trackerId;
+        $issueBlock['subject'] = $issueBlock['subject'] ?? $ticket->subject;
+        $issueBlock['description'] = $issueBlock['description'] ?? $ticket->description;
+        if ($ticket->prioridad !== null && !isset($issueBlock['priority_id'])) {
+            $issueBlock['priority_id'] = $ticket->prioridad;
+        }
+
+        $payload['issue'] = array_filter($issueBlock, static fn ($v) => $v !== null && $v !== []);
 
         if ($ticket->adjuntos !== []) {
             $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
@@ -59,7 +97,54 @@ final class RedmineTicketService
             $headers['X-Redmine-Switch-User'] = $login;
         }
 
-        $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
+        try {
+            $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
+        } catch (RedmineAuthException $e) {
+            $this->logger->error('redmine.crearTicket.auth_error', [
+                'correlation_id' => $context->correlationId,
+                'switch_user' => $login,
+                'code' => $e->getCode(),
+                'message' => $e->getMessage(),
+            ]);
+
+            // HTTP 412 = switch-user references non-existent/inactive user.
+            // Retry without switch-user header.
+            if ($e->getCode() === 412) {
+                $this->logger->error('redmine.crearTicket.retry_without_switch_user', [
+                    'correlation_id' => $context->correlationId,
+                    'original_switch_user' => $login,
+                ]);
+
+                $response = $this->client->request('POST', '/issues.json', $payload, [], $context);
+
+                $issue = $response['issue'] ?? null;
+                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+                return new CrearTicketResult($issueId);
+            }
+
+            // 401/403: try auto-granting CRM project membership
+            if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
+                $this->ensureUserHasProjectMembership(
+                    projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
+                    login: $login,
+                    roleId: self::CRM_PROJECT_ROLE_ID,
+                    context: $context,
+                );
+
+                $this->logger->info('redmine.crearTicket.retry_after_membership', [
+                    'correlation_id' => $context->correlationId,
+                    'switch_user' => $login,
+                ]);
+
+                $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
+
+                $issue = $response['issue'] ?? null;
+                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+                return new CrearTicketResult($issueId);
+            }
+
+            throw $e;
+        }
 
         $issue = $response['issue'] ?? null;
         $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
@@ -68,12 +153,16 @@ final class RedmineTicketService
 
     public function crearHelpdeskTicket(
         TicketDTO $ticket,
-        string $contactEmail,
+        string|ContactDTO $contact,
         int $projectId,
         int $trackerId,
         RequestContext $context,
         ?array $cliente = null,
     ): CrearTicketResult {
+        $contactDTO = $contact instanceof ContactDTO
+            ? $contact
+            : new ContactDTO(email: $contact);
+
         $resolved = $this->resolveUser($context);
         $login = $resolved['login'];
         $extraDescription = $resolved['extraDescription'];
@@ -83,11 +172,50 @@ final class RedmineTicketService
             $ticket->description = $ticket->description . "\n\n" . $extraDescription;
         }
 
-        $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+        try {
+            $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.helpdesk.buildIssuePayload.fallback', [
+                'correlation_id' => $context->correlationId,
+                'error' => get_class($e),
+                'message' => $e->getMessage(),
+                'code' => $e->getCode(),
+            ]);
+
+            $issuePayload = ['issue' => []];
+        }
+
+        // Si buildIssuePayload no resolvió custom fields (resolver vacío porque
+        // GET /custom_fields.json requiere admin), inyectar los del TicketDTO directamente.
+        $issueBlock = $issuePayload['issue'] ?? [];
+        $hasCustomFields = !empty($issueBlock['custom_fields']);
+
+        if (!$hasCustomFields && $ticket->customFields !== []) {
+            $directCustomFields = [];
+            foreach ($ticket->customFields as $cf) {
+                $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
+                $value = is_array($cf) ? ($cf['value'] ?? null) : null;
+                if ($id > 0 && $value !== null) {
+                    $directCustomFields[] = ['id' => $id, 'value' => $value];
+                }
+            }
+            if ($directCustomFields !== []) {
+                $issueBlock['custom_fields'] = $directCustomFields;
+            }
+        }
+
+        // Asegurar campos básicos del issue
+        $issueBlock['project_id'] = $issueBlock['project_id'] ?? $projectId;
+        $issueBlock['tracker_id'] = $issueBlock['tracker_id'] ?? $trackerId;
+        $issueBlock['subject'] = $issueBlock['subject'] ?? $ticket->subject;
+        $issueBlock['description'] = $issueBlock['description'] ?? $ticket->description;
+        if ($ticket->prioridad !== null && !isset($issueBlock['priority_id'])) {
+            $issueBlock['priority_id'] = $ticket->prioridad;
+        }
 
         if ($ticket->adjuntos !== []) {
             $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
-            $issuePayload['issue']['uploads'] = $uploads;
+            $issueBlock['uploads'] = $uploads;
         }
 
         $headers = [];
@@ -98,28 +226,47 @@ final class RedmineTicketService
 
         $payload = [
             'helpdesk_ticket' => [
-                'issue' => $issuePayload['issue'] ?? [],
-                'contact' => [
-                    'email' => $contactEmail,
-                ],
+                'issue' => array_filter($issueBlock, static fn ($v) => $v !== null && $v !== []),
+                'contact' => $contactDTO->toPayloadArray(),
             ],
         ];
+
+        if ($contactDTO->id !== null && $contactDTO->id > 0) {
+            $payload['helpdesk_ticket']['contact_id'] = $contactDTO->id;
+        }
+
+        $this->logger->error('redmine.helpdesk.create.payload', [
+            'correlation_id' => $context->correlationId,
+            'payload' => $payload,
+            'switch_user' => $login,
+        ]);
 
         try {
             $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
 
-            $issue = $response['helpdesk_ticket'] ?? null;
-            $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
-
-            return new CrearTicketResult($issueId);
+            return $this->parseHelpdeskTicketResponse($response);
         } catch (RedmineAuthException $e) {
-            $this->logger->warning('redmine.helpdesk.create.auth_error', [
+            $this->logger->error('redmine.helpdesk.create.auth_error', [
                 'correlation_id' => $context->correlationId,
                 'switch_user' => $login,
                 'code' => $e->getCode(),
                 'message' => $e->getMessage(),
             ]);
 
+            // HTTP 412 = switch-user references non-existent/inactive user.
+            // Retry without switch-user header.
+            if ($e->getCode() === 412) {
+                $this->logger->error('redmine.helpdesk.create.retry_without_switch_user', [
+                    'correlation_id' => $context->correlationId,
+                    'original_switch_user' => $login,
+                ]);
+
+                $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, [], $context);
+
+                return $this->parseHelpdeskTicketResponse($response);
+            }
+
+            // 401/403: try auto-granting CRM membership
             if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
                 $this->ensureUserHasProjectMembership(
                     projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
@@ -135,10 +282,7 @@ final class RedmineTicketService
 
                 $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
 
-                $issue = $response['helpdesk_ticket'] ?? null;
-                $issueId = is_array($issue) ? (int) ($response['helpdesk_ticket']['id'] ?? 0) : 0;
-
-                return new CrearTicketResult($issueId);
+                return $this->parseHelpdeskTicketResponse($response);
             }
 
             throw $e;
@@ -388,15 +532,32 @@ final class RedmineTicketService
             $headers['X-Redmine-Switch-User'] = $login;
         }
 
+        $this->logger->error('redmine.helpdesk.raw.payload', [
+            'correlation_id' => $context->correlationId,
+            'payload' => $payload,
+            'switch_user' => $login,
+        ]);
+
         try {
             return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
         } catch (RedmineAuthException $e) {
-            $this->logger->warning('redmine.helpdesk.raw.auth_error', [
+            $this->logger->error('redmine.helpdesk.raw.auth_error', [
                 'correlation_id' => $context->correlationId,
                 'switch_user' => $login,
                 'code' => $e->getCode(),
                 'message' => $e->getMessage(),
             ]);
+
+            // HTTP 412 = switch-user references non-existent/inactive user.
+            // Retry without switch-user header.
+            if ($e->getCode() === 412) {
+                $this->logger->error('redmine.helpdesk.raw.retry_without_switch_user', [
+                    'correlation_id' => $context->correlationId,
+                    'original_switch_user' => $login,
+                ]);
+
+                return $this->client->request('POST', '/helpdesk_tickets.json', $payload, [], $context);
+            }
 
             if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
                 $this->ensureUserHasProjectMembership(
@@ -419,6 +580,76 @@ final class RedmineTicketService
     }
 
     /**
+     * Creates a helpdesk ticket with automatic fallback.
+     *
+     * Strategy:
+     *   1) Try POST /helpdesk_tickets.json (Helpdesk plugin)
+     *   2) If that fails, fall back to:
+     *      a) POST /issues.json (standard Redmine issue creation)
+     *      b) Associate the contact to the created issue
+     */
+    public function crearHelpdeskTicketConFallback(
+        TicketDTO $ticket,
+        string|ContactDTO $contact,
+        int $projectId,
+        int $trackerId,
+        RequestContext $context,
+        ?int $contactId = null,
+    ): CrearTicketResult {
+        // 1) Try the Helpdesk plugin endpoint
+        try {
+            return $this->crearHelpdeskTicket(
+                $ticket, $contact, $projectId, $trackerId, $context
+            );
+        } catch (\Throwable $helpdeskError) {
+            $this->logger->error('redmine.helpdesk.fallback.helpdesk_failed', [
+                'correlation_id' => $context->correlationId,
+                'error' => get_class($helpdeskError),
+                'message' => $helpdeskError->getMessage(),
+                'code' => $helpdeskError->getCode(),
+            ]);
+        }
+
+        // 2) Fallback: create via /issues.json
+        $this->logger->error('redmine.helpdesk.fallback.creating_issue', [
+            'correlation_id' => $context->correlationId,
+            'project_id' => $projectId,
+            'tracker_id' => $trackerId,
+            'contact_id' => $contactId,
+        ]);
+
+        $result = $this->crearTicket($ticket, $projectId, $trackerId, $context);
+
+        // 3) Associate the contact to the issue (best-effort)
+        if ($result->issueId > 0 && $contactId !== null && $contactId > 0) {
+            try {
+                $this->client->request(
+                    'PUT',
+                    sprintf('/issues/%d.json', $result->issueId),
+                    ['issue' => ['contact_id' => $contactId]],
+                    [],
+                    $context
+                );
+                $this->logger->error('redmine.helpdesk.fallback.contact_assigned', [
+                    'correlation_id' => $context->correlationId,
+                    'issue_id' => $result->issueId,
+                    'contact_id' => $contactId,
+                ]);
+            } catch (\Throwable $assignError) {
+                $this->logger->error('redmine.helpdesk.fallback.contact_assign_failed', [
+                    'correlation_id' => $context->correlationId,
+                    'issue_id' => $result->issueId,
+                    'contact_id' => $contactId,
+                    'error' => get_class($assignError),
+                    'message' => $assignError->getMessage(),
+                ]);
+            }
+        }
+
+        return $result;
+    }
+
+    /**
      * @param AdjuntoInlineDTO[] $adjuntos
      * @return array<int, array<string, string>>
      */
@@ -438,6 +669,34 @@ final class RedmineTicketService
         }
 
         return $uploads;
+    }
+
+    /**
+     * @param array<string, mixed> $response
+     */
+    private function parseHelpdeskTicketResponse(array $response): CrearTicketResult
+    {
+        $issueId = 0;
+
+        $ht = $response['helpdesk_ticket'] ?? null;
+        if (is_array($ht)) {
+            $issueId = (int) ($ht['id'] ?? 0);
+            if ($issueId === 0) {
+                $issue = $ht['issue'] ?? null;
+                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+            }
+        }
+
+        if ($issueId === 0) {
+            $issue = $response['issue'] ?? null;
+            $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+        }
+
+        if ($issueId === 0) {
+            $issueId = (int) ($response['issue_id'] ?? $response['id'] ?? 0);
+        }
+
+        return new CrearTicketResult($issueId);
     }
 
     private function resolveContent(string $content): string

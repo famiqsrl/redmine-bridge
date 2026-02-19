@@ -35,7 +35,11 @@ final class RedmineUserResolver
         $isInternal = false;
         if ($email !== '' && str_contains($email, '@')) {
             $domain = strtolower(substr(strrchr($email, '@') ?: '', 1));
-            $isInternal = $domain === strtolower($this->config->internalEmailDomain);
+            $allDomains = array_map('strtolower', array_merge(
+                [$this->config->internalEmailDomain],
+                $this->config->internalEmailDomains,
+            ));
+            $isInternal = in_array($domain, $allDomains, true);
         }
 
         // 1) Si el usuario existe en Redmine → usamos switch-user
@@ -168,10 +172,20 @@ final class RedmineUserResolver
 
     private function isInternalEmail(string $email): bool
     {
-        $domain = $this->config->internalEmailDomain;
-        $atDomain = '@' . ltrim($domain, '@');
+        $emailLower = strtolower($email);
+        $allDomains = array_merge(
+            [$this->config->internalEmailDomain],
+            $this->config->internalEmailDomains,
+        );
 
-        return str_ends_with(strtolower($email), strtolower($atDomain));
+        foreach ($allDomains as $domain) {
+            $atDomain = '@' . ltrim(strtolower($domain), '@');
+            if (str_ends_with($emailLower, $atDomain)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function buildExternalUserDescription(RequestContext $context): string

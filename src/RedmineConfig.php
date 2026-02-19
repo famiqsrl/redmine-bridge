@@ -17,6 +17,8 @@ final class RedmineConfig
         public bool $useSsl = true,
         public string $fallbackUserLogin = 'redminecrm',
         public string $internalEmailDomain = 'famiq.com.ar',
+        /** @var string[] Dominios internos adicionales que permiten crear usuarios en Redmine */
+        public array $internalEmailDomains = ['famiq.com.uy'],
     ) {
     }
 }

@@ -6,7 +6,6 @@ namespace Famiq\RedmineBridge;
 
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\AdjuntoInlineDTO;
-use Famiq\RedmineBridge\DTO\ContactDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
@@ -33,8 +32,7 @@ final class RedmineTicketService
         private RedmineCustomFieldResolver $customFieldResolver,
         private LoggerInterface $logger = new NullLogger(),
         private ?RedmineUserResolver $userResolver = null,
-    ) {
-    }
+    ) {}
 
     public function crearTicket(TicketDTO $ticket, int $projectId, int $trackerId, RequestContext $context): CrearTicketResult
     {
@@ -47,44 +45,7 @@ final class RedmineTicketService
             $ticket->description = $ticket->description . "\n\n" . $extraDescription;
         }
 
-        try {
-            $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
-        } catch (\Throwable $e) {
-            $this->logger->warning('redmine.crearTicket.buildIssuePayload.fallback', [
-                'correlation_id' => $context->correlationId,
-                'error' => get_class($e),
-                'message' => $e->getMessage(),
-            ]);
-            $payload = ['issue' => []];
-        }
-
-        // If buildIssuePayload could not resolve custom fields (resolver requires admin),
-        // inject them directly from the TicketDTO (which already has ID-based fields).
-        $issueBlock = $payload['issue'] ?? [];
-        if (empty($issueBlock['custom_fields']) && $ticket->customFields !== []) {
-            $directCf = [];
-            foreach ($ticket->customFields as $cf) {
-                $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
-                $value = is_array($cf) ? ($cf['value'] ?? null) : null;
-                if ($id > 0 && $value !== null) {
-                    $directCf[] = ['id' => $id, 'value' => $value];
-                }
-            }
-            if ($directCf !== []) {
-                $issueBlock['custom_fields'] = $directCf;
-            }
-        }
-
-        // Ensure basic issue fields are present
-        $issueBlock['project_id'] = $issueBlock['project_id'] ?? $projectId;
-        $issueBlock['tracker_id'] = $issueBlock['tracker_id'] ?? $trackerId;
-        $issueBlock['subject'] = $issueBlock['subject'] ?? $ticket->subject;
-        $issueBlock['description'] = $issueBlock['description'] ?? $ticket->description;
-        if ($ticket->prioridad !== null && !isset($issueBlock['priority_id'])) {
-            $issueBlock['priority_id'] = $ticket->prioridad;
-        }
-
-        $payload['issue'] = array_filter($issueBlock, static fn ($v) => $v !== null && $v !== []);
+        $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
 
         if ($ticket->adjuntos !== []) {
             $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
@@ -97,54 +58,7 @@ final class RedmineTicketService
             $headers['X-Redmine-Switch-User'] = $login;
         }
 
-        try {
-            $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
-        } catch (RedmineAuthException $e) {
-            $this->logger->error('redmine.crearTicket.auth_error', [
-                'correlation_id' => $context->correlationId,
-                'switch_user' => $login,
-                'code' => $e->getCode(),
-                'message' => $e->getMessage(),
-            ]);
-
-            // HTTP 412 = switch-user references non-existent/inactive user.
-            // Retry without switch-user header.
-            if ($e->getCode() === 412) {
-                $this->logger->error('redmine.crearTicket.retry_without_switch_user', [
-                    'correlation_id' => $context->correlationId,
-                    'original_switch_user' => $login,
-                ]);
-
-                $response = $this->client->request('POST', '/issues.json', $payload, [], $context);
-
-                $issue = $response['issue'] ?? null;
-                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
-                return new CrearTicketResult($issueId);
-            }
-
-            // 401/403: try auto-granting CRM project membership
-            if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
-                $this->ensureUserHasProjectMembership(
-                    projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
-                    login: $login,
-                    roleId: self::CRM_PROJECT_ROLE_ID,
-                    context: $context,
-                );
-
-                $this->logger->info('redmine.crearTicket.retry_after_membership', [
-                    'correlation_id' => $context->correlationId,
-                    'switch_user' => $login,
-                ]);
-
-                $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
-
-                $issue = $response['issue'] ?? null;
-                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
-                return new CrearTicketResult($issueId);
-            }
-
-            throw $e;
-        }
+        $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
 
         $issue = $response['issue'] ?? null;
         $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
@@ -185,33 +99,61 @@ final class RedmineTicketService
             $issuePayload = ['issue' => []];
         }
 
-        // Si buildIssuePayload no resolvió custom fields (resolver vacío porque
-        // GET /custom_fields.json requiere admin), inyectar los del TicketDTO directamente.
         $issueBlock = $issuePayload['issue'] ?? [];
-        $hasCustomFields = !empty($issueBlock['custom_fields']);
+        $payloadCfs = $issueBlock['custom_fields'] ?? [];
+        if (!is_array($payloadCfs)) {
+            $payloadCfs = [];
+        }
 
-        if (!$hasCustomFields && $ticket->customFields !== []) {
-            $directCustomFields = [];
-            foreach ($ticket->customFields as $cf) {
-                $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
-                $value = is_array($cf) ? ($cf['value'] ?? null) : null;
-                if ($id > 0 && $value !== null) {
-                    $directCustomFields[] = ['id' => $id, 'value' => $value];
-                }
-            }
-            if ($directCustomFields !== []) {
-                $issueBlock['custom_fields'] = $directCustomFields;
+        $dtoCfs = [];
+        foreach ($ticket->customFields as $cf) {
+            $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
+            $value = is_array($cf) ? ($cf['value'] ?? null) : null;
+            if ($id > 0 && $value !== null) {
+                $dtoCfs[$id] = $value;
             }
         }
 
-        // Asegurar campos básicos del issue
+        $mergedById = [];
+
+        foreach ($payloadCfs as $cf) {
+            if (!is_array($cf)) {
+                continue;
+            }
+            $id = (int) ($cf['id'] ?? 0);
+            if ($id <= 0) {
+                continue;
+            }
+            $mergedById[$id] = $cf['value'] ?? null;
+        }
+
+        foreach ($dtoCfs as $id => $value) {
+            $mergedById[(int) $id] = $value;
+        }
+
+        $finalCfs = [];
+        foreach ($mergedById as $id => $value) {
+            if ((int) $id <= 0 || $value === null || $value === []) {
+                continue;
+            }
+            $finalCfs[] = ['id' => (int) $id, 'value' => $value];
+        }
+
+        if ($finalCfs !== []) {
+            $issueBlock['custom_fields'] = array_values($finalCfs);
+        }
+
         $issueBlock['project_id'] = $issueBlock['project_id'] ?? $projectId;
         $issueBlock['tracker_id'] = $issueBlock['tracker_id'] ?? $trackerId;
         $issueBlock['subject'] = $issueBlock['subject'] ?? $ticket->subject;
         $issueBlock['description'] = $issueBlock['description'] ?? $ticket->description;
+
         if ($ticket->prioridad !== null && !isset($issueBlock['priority_id'])) {
             $issueBlock['priority_id'] = $ticket->prioridad;
         }
+
+        // Redmine start_date admite solo YYYY-MM-DD (sin hora)
+        $issueBlock['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
 
         if ($ticket->adjuntos !== []) {
             $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
@@ -226,7 +168,7 @@ final class RedmineTicketService
 
         $payload = [
             'helpdesk_ticket' => [
-                'issue' => array_filter($issueBlock, static fn ($v) => $v !== null && $v !== []),
+                'issue' => array_filter($issueBlock, static fn($v) => $v !== null && $v !== []),
                 'contact' => $contactDTO->toPayloadArray(),
             ],
         ];
@@ -253,8 +195,6 @@ final class RedmineTicketService
                 'message' => $e->getMessage(),
             ]);
 
-            // HTTP 412 = switch-user references non-existent/inactive user.
-            // Retry without switch-user header.
             if ($e->getCode() === 412) {
                 $this->logger->error('redmine.helpdesk.create.retry_without_switch_user', [
                     'correlation_id' => $context->correlationId,
@@ -266,7 +206,6 @@ final class RedmineTicketService
                 return $this->parseHelpdeskTicketResponse($response);
             }
 
-            // 401/403: try auto-granting CRM membership
             if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
                 $this->ensureUserHasProjectMembership(
                     projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
@@ -481,7 +420,8 @@ final class RedmineTicketService
                 'subject' => $subject,
                 'description' => $description,
                 'custom_fields' => $this->buildCustomFields($customFields),
-            ], static fn ($value) => $value !== null && $value !== []),
+                'start_date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+            ], static fn($value) => $value !== null && $value !== []),
         ];
 
         $headers = [];
@@ -532,32 +472,22 @@ final class RedmineTicketService
             $headers['X-Redmine-Switch-User'] = $login;
         }
 
-        $this->logger->error('redmine.helpdesk.raw.payload', [
-            'correlation_id' => $context->correlationId,
-            'payload' => $payload,
-            'switch_user' => $login,
-        ]);
+        // Best-effort start_date si viene issue en el payload raw
+        if (isset($payload['helpdesk_ticket']['issue']) && is_array($payload['helpdesk_ticket']['issue'])) {
+            if (!isset($payload['helpdesk_ticket']['issue']['start_date'])) {
+                $payload['helpdesk_ticket']['issue']['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
+            }
+        }
 
         try {
             return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
         } catch (RedmineAuthException $e) {
-            $this->logger->error('redmine.helpdesk.raw.auth_error', [
+            $this->logger->warning('redmine.helpdesk.raw.auth_error', [
                 'correlation_id' => $context->correlationId,
                 'switch_user' => $login,
                 'code' => $e->getCode(),
                 'message' => $e->getMessage(),
             ]);
-
-            // HTTP 412 = switch-user references non-existent/inactive user.
-            // Retry without switch-user header.
-            if ($e->getCode() === 412) {
-                $this->logger->error('redmine.helpdesk.raw.retry_without_switch_user', [
-                    'correlation_id' => $context->correlationId,
-                    'original_switch_user' => $login,
-                ]);
-
-                return $this->client->request('POST', '/helpdesk_tickets.json', $payload, [], $context);
-            }
 
             if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
                 $this->ensureUserHasProjectMembership(
@@ -580,76 +510,6 @@ final class RedmineTicketService
     }
 
     /**
-     * Creates a helpdesk ticket with automatic fallback.
-     *
-     * Strategy:
-     *   1) Try POST /helpdesk_tickets.json (Helpdesk plugin)
-     *   2) If that fails, fall back to:
-     *      a) POST /issues.json (standard Redmine issue creation)
-     *      b) Associate the contact to the created issue
-     */
-    public function crearHelpdeskTicketConFallback(
-        TicketDTO $ticket,
-        string|ContactDTO $contact,
-        int $projectId,
-        int $trackerId,
-        RequestContext $context,
-        ?int $contactId = null,
-    ): CrearTicketResult {
-        // 1) Try the Helpdesk plugin endpoint
-        try {
-            return $this->crearHelpdeskTicket(
-                $ticket, $contact, $projectId, $trackerId, $context
-            );
-        } catch (\Throwable $helpdeskError) {
-            $this->logger->error('redmine.helpdesk.fallback.helpdesk_failed', [
-                'correlation_id' => $context->correlationId,
-                'error' => get_class($helpdeskError),
-                'message' => $helpdeskError->getMessage(),
-                'code' => $helpdeskError->getCode(),
-            ]);
-        }
-
-        // 2) Fallback: create via /issues.json
-        $this->logger->error('redmine.helpdesk.fallback.creating_issue', [
-            'correlation_id' => $context->correlationId,
-            'project_id' => $projectId,
-            'tracker_id' => $trackerId,
-            'contact_id' => $contactId,
-        ]);
-
-        $result = $this->crearTicket($ticket, $projectId, $trackerId, $context);
-
-        // 3) Associate the contact to the issue (best-effort)
-        if ($result->issueId > 0 && $contactId !== null && $contactId > 0) {
-            try {
-                $this->client->request(
-                    'PUT',
-                    sprintf('/issues/%d.json', $result->issueId),
-                    ['issue' => ['contact_id' => $contactId]],
-                    [],
-                    $context
-                );
-                $this->logger->error('redmine.helpdesk.fallback.contact_assigned', [
-                    'correlation_id' => $context->correlationId,
-                    'issue_id' => $result->issueId,
-                    'contact_id' => $contactId,
-                ]);
-            } catch (\Throwable $assignError) {
-                $this->logger->error('redmine.helpdesk.fallback.contact_assign_failed', [
-                    'correlation_id' => $context->correlationId,
-                    'issue_id' => $result->issueId,
-                    'contact_id' => $contactId,
-                    'error' => get_class($assignError),
-                    'message' => $assignError->getMessage(),
-                ]);
-            }
-        }
-
-        return $result;
-    }
-
-    /**
      * @param AdjuntoInlineDTO[] $adjuntos
      * @return array<int, array<string, string>>
      */
@@ -669,34 +529,6 @@ final class RedmineTicketService
         }
 
         return $uploads;
-    }
-
-    /**
-     * @param array<string, mixed> $response
-     */
-    private function parseHelpdeskTicketResponse(array $response): CrearTicketResult
-    {
-        $issueId = 0;
-
-        $ht = $response['helpdesk_ticket'] ?? null;
-        if (is_array($ht)) {
-            $issueId = (int) ($ht['id'] ?? 0);
-            if ($issueId === 0) {
-                $issue = $ht['issue'] ?? null;
-                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
-            }
-        }
-
-        if ($issueId === 0) {
-            $issue = $response['issue'] ?? null;
-            $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
-        }
-
-        if ($issueId === 0) {
-            $issueId = (int) ($response['issue_id'] ?? $response['id'] ?? 0);
-        }
-
-        return new CrearTicketResult($issueId);
     }
 
     private function resolveContent(string $content): string
@@ -746,7 +578,15 @@ final class RedmineTicketService
         $resolvedCustomFieldsById = $this->autofillRequiredCustomFields($issueCustomFields, $resolvedCustomFieldsById);
         $this->assertRequiredCustomFields($trackerId, $issueCustomFields, $resolvedCustomFieldsById, $customFieldMap);
 
-        return $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
+        $payload = $this->mapper->issuePayload($ticket, $projectId, $trackerId, $resolvedCustomFieldsById);
+
+        if (!isset($payload['issue']) || !is_array($payload['issue'])) {
+            $payload['issue'] = [];
+        }
+
+        $payload['issue']['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
+
+        return $payload;
     }
 
     private function uploadContent(string $content, string $filename, RequestContext $context): string
@@ -798,7 +638,16 @@ final class RedmineTicketService
         $resolved = [];
 
         foreach ($customFields as $key => $value) {
-            if (!array_key_exists($key, $customFieldMap)) {
+            if ($value === null || $value === []) {
+                continue;
+            }
+
+            if (is_int($key) || (is_string($key) && ctype_digit($key))) {
+                $resolved[(int) $key] = $value;
+                continue;
+            }
+
+            if (!is_string($key) || !array_key_exists($key, $customFieldMap)) {
                 continue;
             }
 
@@ -919,7 +768,7 @@ final class RedmineTicketService
         }
 
         if ($select !== null) {
-            $normalizedSelect = array_values(array_filter(array_map('strval', $select), static fn ($value) => $value !== ''));
+            $normalizedSelect = array_values(array_filter(array_map('strval', $select), static fn($value) => $value !== ''));
             if ($normalizedSelect !== []) {
                 $params['select'] = implode(',', $normalizedSelect);
             }
@@ -967,11 +816,8 @@ final class RedmineTicketService
         return $normalized;
     }
 
-
-
     private function shouldAutoGrantCrmMembership(string $login, RequestContext $context): bool
     {
-        
         return trim($login) !== '';
     }
 
@@ -1112,5 +958,30 @@ final class RedmineTicketService
         }
 
         return false;
+    }
+
+    private function parseHelpdeskTicketResponse(array $response): CrearTicketResult
+    {
+        $issueId = 0;
+
+        $ht = $response['helpdesk_ticket'] ?? null;
+        if (is_array($ht)) {
+            $issueId = (int) ($ht['id'] ?? 0);
+            if ($issueId === 0) {
+                $issue = $ht['issue'] ?? null;
+                $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+            }
+        }
+
+        if ($issueId === 0) {
+            $issue = $response['issue'] ?? null;
+            $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+        }
+
+        if ($issueId === 0) {
+            $issueId = (int) ($response['issue_id'] ?? ($response['id'] ?? 0));
+        }
+
+        return new CrearTicketResult($issueId);
     }
 }

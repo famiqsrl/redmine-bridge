@@ -4,39 +4,44 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge;
 
-/**
- * Encapsula la lógica de negocio para construir los custom fields
- * obligatorios de Redmine según el tipo de caso (consulta/reclamo/solicitud).
- */
 final class CasoCustomFieldsBuilder
 {
-    // ── Custom Field IDs (issue) ─────────────────────────────────
-    public const CF_NUMERO_PEDIDO_ID = 11;
-    public const CF_POSICIONES_ID = 12;
-    public const CF_CREADO_POR_FAMIQ_ID = 13;
-    public const CF_MOTIVO_CONSULTA_ID = 15;
-    public const CF_MOTIVO_AVISO_PROACTIVO_ID = 16;
-    public const CF_MOTIVO_RECLAMO_ID = 17;
-    public const CF_MOTIVO_SOLICITUD_ID = 18;
-    public const CF_FORMA_CONTACTO_ID = 19;
-    public const CF_MOTIVO_RESOLUCION_ID = 20;
+    public const CF_NUMERO_PEDIDO_ID = 2;
+    public const CF_POSICIONES_ID = 3;
+    public const CF_CREADO_POR_FAMIQ_ID = 4;
+    public const CF_MOTIVO_CONSULTA_ID = 5;
+    public const CF_MOTIVO_AVISO_PROACTIVO_ID = 6;
+    public const CF_MOTIVO_RECLAMO_ID = 7;
+    public const CF_MOTIVO_SOLICITUD_ID = 8;
+    public const CF_FORMA_CONTACTO_ID = 9;
+    public const CF_MOTIVO_RESOLUCION_ID = 10;
 
-    // ── Valores por defecto ──────────────────────────────────────
     public const CF_FORMA_CONTACTO_VALUE = 'PIN';
-    public const CF_MOTIVO_RESOLUCION_VALUE = 'Enviamos la información solicitada';
-    public const CF_MOTIVO_SOLICITUD_VALUE = 'S70. Otras solicitudes';
+    public const CF_MOTIVO_RESOLUCION_VALUE = '105';
 
     public const CF_CREADO_POR_FAMIQ_YES = 1;
     public const CF_CREADO_POR_FAMIQ_NO = 0;
 
-    // ── Custom Field IDs (contacto) ──────────────────────────────
-    public const CONTACT_CF_CLASE_CLIENTE_ID = 10;
+    public const CONTACT_CF_CLASE_CLIENTE_ID = 1;
     public const CONTACT_CF_CLASE_CLIENTE_DEFAULT = 'A';
 
-    // ── IDs de custom fields de referencia de empresa en issues ──
-    public const ISSUE_COMPANY_REF_CUSTOM_FIELD_IDS = [12, 13, 14];
+    private const ENUM_FORMA_CONTACTO = [
+        'PIN' => '85',
+    ];
 
-    // ── Mapeo caso ID → tipo de ayuda (C/R/S) ───────────────────
+    private const ALLOWED_SMALL_IDS = [
+        self::CF_FORMA_CONTACTO_ID,
+        self::CF_MOTIVO_RESOLUCION_ID,
+        self::CF_MOTIVO_CONSULTA_ID,
+        self::CF_MOTIVO_RECLAMO_ID,
+        self::CF_MOTIVO_SOLICITUD_ID,
+        self::CF_NUMERO_PEDIDO_ID,
+        self::CF_POSICIONES_ID,
+        self::CF_CREADO_POR_FAMIQ_ID,
+    ];
+
+    public const ISSUE_COMPANY_REF_CUSTOM_FIELD_IDS = [2, 3, 4];
+
     private const CASO_TIPO_AYUDA_MAP = [
         1 => 'C',
         2 => 'C',
@@ -65,7 +70,6 @@ final class CasoCustomFieldsBuilder
         25 => 'S',
     ];
 
-    // ── Mapeo caso ID → valor exacto que espera Redmine para el campo motivo ──
     private const CASO_MOTIVO_REDMINE_MAP = [
         '1'  => 'C10. Consultar el estado del pedido',
         '2'  => 'C20. Consultar datos del pedido (importe, entrega, etc.)',
@@ -94,18 +98,7 @@ final class CasoCustomFieldsBuilder
         '25' => 'S54. Solicitar descuento de percepciones sobre una factura',
     ];
 
-    // ── Enumeraciones: texto → ID numérico de Redmine ────────────
-    private const ENUM_FORMA_CONTACTO = [
-        'PIN' => '93',
-        'Llamada telefónica' => '94',
-        'Email' => '95',
-        'Acerin' => '96',
-        'Internet' => '97',
-        'Visita' => '98',
-        'Mostrador' => '99',
-        'Vendedor' => '100',
-        'WhatsApp' => '101',
-    ];
+
 
     private const ENUM_MOTIVO_CONSULTA_BY_CODE = [
         'C10' => '8',
@@ -211,23 +204,6 @@ final class CasoCustomFieldsBuilder
         'Reprogramamos la entrega' => '113',
     ];
 
-    // ── IDs permitidos para sanitización ─────────────────────────
-    private const ALLOWED_SMALL_IDS = [
-        self::CF_FORMA_CONTACTO_ID,
-        self::CF_MOTIVO_RESOLUCION_ID,
-        self::CF_MOTIVO_CONSULTA_ID,
-        self::CF_MOTIVO_RECLAMO_ID,
-        self::CF_MOTIVO_SOLICITUD_ID,
-        self::CF_NUMERO_PEDIDO_ID,
-        self::CF_POSICIONES_ID,
-        self::CF_CREADO_POR_FAMIQ_ID,
-    ];
-
-    /**
-     * Construye los custom fields obligatorios para un caso, listos para enviar a Redmine.
-     *
-     * @return array<int, array{id: int, value: mixed}>
-     */
     public function buildForCaso(
         ?int $casoId,
         ?string $tipoAyuda,
@@ -235,7 +211,6 @@ final class CasoCustomFieldsBuilder
         ?string $numeroPedido = null,
         ?string $posiciones = null,
     ): array {
-        // Inferir tipo de ayuda desde el caso si es posible
         if ($casoId !== null) {
             $tipoInferido = $this->inferirTipoAyuda($casoId);
             if ($tipoInferido !== null) {
@@ -243,26 +218,37 @@ final class CasoCustomFieldsBuilder
             }
         }
 
-        // Resolver motivo
-        $motivoRedmine = $casoId !== null ? $this->obtenerMotivoRedminePorCaso($casoId) : null;
+        $numeroPedido = is_string($numeroPedido) ? trim($numeroPedido) : $numeroPedido;
+        if ($numeroPedido === '' || $numeroPedido === 'null') {
+            $numeroPedido = null;
+        }
+
+        $posiciones = is_string($posiciones) ? trim($posiciones) : $posiciones;
+        if ($posiciones === '' || $posiciones === 'null') {
+            $posiciones = null;
+        }
+
         $motivoCfId = $this->obtenerCustomFieldIdMotivo((string) $tipoAyuda);
 
-        // Construir array base
         $customFields = [
             ['id' => self::CF_FORMA_CONTACTO_ID, 'value' => self::CF_FORMA_CONTACTO_VALUE],
-            ['id' => $motivoCfId, 'value' => $motivoRedmine],
             ['id' => self::CF_MOTIVO_RESOLUCION_ID, 'value' => self::CF_MOTIVO_RESOLUCION_VALUE],
             ['id' => self::CF_CREADO_POR_FAMIQ_ID, 'value' => $esFamiq ? self::CF_CREADO_POR_FAMIQ_YES : self::CF_CREADO_POR_FAMIQ_NO],
         ];
 
+        if ($motivoCfId !== null) {
+            $motivoRedmine = $casoId !== null ? $this->obtenerMotivoRedminePorCaso($casoId) : null;
+            $customFields[] = ['id' => $motivoCfId, 'value' => $motivoRedmine];
+        }
+
         if ($numeroPedido !== null) {
             $customFields[] = ['id' => self::CF_NUMERO_PEDIDO_ID, 'value' => $numeroPedido];
         }
+
         if ($posiciones !== null) {
             $customFields[] = ['id' => self::CF_POSICIONES_ID, 'value' => $posiciones];
         }
 
-        // Convertir enumeraciones (texto → ID numérico)
         $customFields = array_map(function ($cf) {
             $id = (int) ($cf['id'] ?? 0);
             if ($id <= 0 || !array_key_exists('value', $cf)) {
@@ -272,7 +258,6 @@ final class CasoCustomFieldsBuilder
             return $cf;
         }, $customFields);
 
-        // Filtrar campos vacíos/nulos/con id inválido
         $customFields = array_values(array_filter(
             $customFields,
             static fn($cf) => isset($cf['id']) && (int) $cf['id'] > 0
@@ -281,21 +266,14 @@ final class CasoCustomFieldsBuilder
                 && !(is_string($cf['value']) && trim($cf['value']) === '')
         ));
 
-        // Sanitizar
         return $this->sanitizeCustomFields($customFields, $tipoAyuda);
     }
 
-    /**
-     * Infiere el tipo de ayuda (C/R/S) a partir del ID del caso.
-     */
     public function inferirTipoAyuda(int $casoId): ?string
     {
         return self::CASO_TIPO_AYUDA_MAP[$casoId] ?? null;
     }
 
-    /**
-     * Mapea tipo de ayuda (C/R/S) al tracker ID de Redmine.
-     */
     public function obtenerTrackerId(string $tipoAyuda): int
     {
         return match ($tipoAyuda) {
@@ -306,9 +284,6 @@ final class CasoCustomFieldsBuilder
         };
     }
 
-    /**
-     * Obtiene el texto del motivo Redmine por ID de caso.
-     */
     public function obtenerMotivoRedminePorCaso(int $casoId): ?string
     {
         return self::CASO_MOTIVO_REDMINE_MAP[(string) $casoId] ?? null;
@@ -324,11 +299,6 @@ final class CasoCustomFieldsBuilder
         return self::CONTACT_CF_CLASE_CLIENTE_DEFAULT;
     }
 
-    // ── Privados ─────────────────────────────────────────────────
-
-    /**
-     * Devuelve el ID del custom field de motivo según el tipo de ayuda.
-     */
     private function obtenerCustomFieldIdMotivo(string $tipoAyuda): ?int
     {
         return match ($tipoAyuda) {
@@ -339,9 +309,6 @@ final class CasoCustomFieldsBuilder
         };
     }
 
-    /**
-     * Extrae el código de motivo (ej. "C10", "R30") de un texto.
-     */
     private function extractMotivoCode(?string $text): ?string
     {
         if (!is_string($text)) {
@@ -365,9 +332,6 @@ final class CasoCustomFieldsBuilder
         return null;
     }
 
-    /**
-     * Convierte el valor de un custom field enumeration de texto a su ID numérico.
-     */
     private function mapEnumerationValue(int $cfId, mixed $value): mixed
     {
         if ($value === null) {
@@ -378,45 +342,47 @@ final class CasoCustomFieldsBuilder
             return (string) $value;
         }
 
-        if (is_string($value) && preg_match('/^\d+$/', trim($value))) {
-            return trim($value);
+        if (is_string($value)) {
+            $t = trim($value);
+            if ($t === '' || $t === 'null') {
+                return null;
+            }
+            if (preg_match('/^\d+$/', $t)) {
+                return $t;
+            }
+
+            if ($cfId === self::CF_FORMA_CONTACTO_ID) {
+                return self::ENUM_FORMA_CONTACTO[$t] ?? null;
+            }
+
+            if (in_array($cfId, [self::CF_MOTIVO_CONSULTA_ID, self::CF_MOTIVO_RECLAMO_ID, self::CF_MOTIVO_SOLICITUD_ID], true)) {
+                $code = $this->extractMotivoCode($t);
+                if ($code === null) {
+                    return null;
+                }
+
+                return match ($cfId) {
+                    self::CF_MOTIVO_CONSULTA_ID => self::ENUM_MOTIVO_CONSULTA_BY_CODE[$code] ?? null,
+                    self::CF_MOTIVO_RECLAMO_ID => self::ENUM_MOTIVO_RECLAMO_BY_CODE[$code] ?? null,
+                    self::CF_MOTIVO_SOLICITUD_ID => self::ENUM_MOTIVO_SOLICITUD_BY_CODE[$code] ?? null,
+                    default => null,
+                };
+            }
+
+            if ($cfId === self::CF_MOTIVO_RESOLUCION_ID) {
+                return self::ENUM_MOTIVO_RESOLUCION[$t] ?? null;
+            }
+
+            return $value;
         }
 
-        $v = is_string($value) ? trim($value) : (string) $value;
-
-        return match ($cfId) {
-            self::CF_FORMA_CONTACTO_ID => self::ENUM_FORMA_CONTACTO[$v] ?? null,
-
-            self::CF_MOTIVO_RESOLUCION_ID => self::ENUM_MOTIVO_RESOLUCION[$v] ?? null,
-
-            self::CF_MOTIVO_CONSULTA_ID => (function () use ($v) {
-                $code = $this->extractMotivoCode($v);
-                return $code ? (self::ENUM_MOTIVO_CONSULTA_BY_CODE[$code] ?? null) : null;
-            })(),
-
-            self::CF_MOTIVO_RECLAMO_ID => (function () use ($v) {
-                $code = $this->extractMotivoCode($v);
-                return $code ? (self::ENUM_MOTIVO_RECLAMO_BY_CODE[$code] ?? null) : null;
-            })(),
-
-            self::CF_MOTIVO_SOLICITUD_ID => (function () use ($v) {
-                $code = $this->extractMotivoCode($v);
-                return $code ? (self::ENUM_MOTIVO_SOLICITUD_BY_CODE[$code] ?? null) : null;
-            })(),
-
-            default => $value,
-        };
+        return $value;
     }
 
-    /**
-     * Sanitiza los custom fields: filtra IDs no permitidos y valores inválidos.
-     *
-     * @param array<int, array{id: int, value: mixed}> $customFields
-     * @return array<int, array{id: int, value: mixed}>
-     */
     private function sanitizeCustomFields(array $customFields, ?string $tipoDeAyuda = null): array
     {
         $out = [];
+
         foreach ($customFields as $cf) {
             $id = (int) ($cf['id'] ?? 0);
             $value = $cf['value'] ?? null;
@@ -435,7 +401,7 @@ final class CasoCustomFieldsBuilder
                 continue;
             }
 
-            if ($id <= 20 && !in_array($id, self::ALLOWED_SMALL_IDS, true)) {
+            if ($id <= 10 && !in_array($id, self::ALLOWED_SMALL_IDS, true)) {
                 continue;
             }
 

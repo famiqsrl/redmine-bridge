@@ -657,6 +657,7 @@ final class RedmineTicketService
         return $resolved;
     }
 
+
     /**
      * @param array<int, array<string, mixed>> $issueCustomFields
      * @param array<int, mixed> $resolvedCustomFieldsById

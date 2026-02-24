@@ -11,8 +11,12 @@ final class RedmineValidationException extends RuntimeException
     /**
      * @param array<string, mixed> $errors
      */
-    public function __construct(string $message, public array $errors = [], int $code = 0)
-    {
+    public function __construct(
+        string $message,
+        public array $errors = [],
+        int $code = 0,
+        public ?string $rawPayload = null,
+    ) {
         parent::__construct($message, $code);
     }
 }

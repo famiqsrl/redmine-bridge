@@ -18,7 +18,7 @@ final class RedmineUserResolver
     ) {}
 
     /**
-     * @return array{login: ?string, extraDescription: ?string}
+     * @return array{login: ?string, extraDescription: ?string, userId: ?int}
      */
     public function resolveUserForTicket(\Famiq\RedmineBridge\RequestContext $context): array
     {
@@ -28,9 +28,13 @@ final class RedmineUserResolver
         $apellido = $context->apellidoUsuario ? trim((string) $context->apellidoUsuario) : '';
 
         if ($login === '') {
-            // Sin login no hay switch-user
-            return ['login' => null, 'extraDescription' => null];
+            return ['login' => null, 'extraDescription' => null, 'userId' => null];
         }
+
+        // Contexto SIN Switch-User para operaciones admin (lookup/create user).
+        // Si usamos el context original, Redmine evalua permisos del usuario
+        // impersonado (que no tiene permisos de admin) → 403.
+        $adminContext = new RequestContext($context->correlationId);
 
         $isInternal = false;
         if ($email !== '' && str_contains($email, '@')) {
@@ -44,15 +48,13 @@ final class RedmineUserResolver
 
         // 1) Si el usuario existe en Redmine → usamos switch-user
         try {
-            // OJO: en Redmine API estándar es /users.json (requiere permisos).
-            // Si tu Redmine no permite listar usuarios, esto puede fallar.
-            $res = $this->client->request('GET', '/users.json?name=' . rawurlencode($login) . '&limit=1', null, [], $context);
+            $res = $this->client->request('GET', '/users.json?name=' . rawurlencode($login) . '&limit=1', null, [], $adminContext);
             $users = $res['users'] ?? [];
             if (is_array($users) && isset($users[0]['login']) && (string) $users[0]['login'] === $login) {
-                return ['login' => $login, 'extraDescription' => null];
+                $userId = isset($users[0]['id']) ? (int) $users[0]['id'] : null;
+                return ['login' => $login, 'extraDescription' => null, 'userId' => $userId ?: null];
             }
         } catch (\Throwable $e) {
-            // Si no se puede consultar usuarios, NO forzamos switch-user a ciegas
             $this->logger->warning('redmine.userResolver.user_lookup_failed', [
                 'correlation_id' => $context->correlationId,
                 'login' => $login,
@@ -62,10 +64,9 @@ final class RedmineUserResolver
             ]);
         }
 
-        // 2) Si es interno, intentamos crear usuario (si tenés permisos)
+        // 2) Si es interno, intentamos crear usuario (sin Switch-User → como admin)
         if ($isInternal) {
             try {
-                // Si no tenés lastname/nombre, igual mandamos algo válido
                 $firstName = $nombre !== '' ? $nombre : $login;
                 $lastName = $apellido !== '' ? $apellido : 'PIN';
 
@@ -75,18 +76,23 @@ final class RedmineUserResolver
                         'firstname' => $firstName,
                         'lastname' => $lastName,
                         'mail' => $email !== '' ? $email : ($login . '@' . $this->config->internalEmailDomain),
-                        // Si tu Redmine requiere password, esto puede fallar.
-                        // Si usa LDAP, puede que NO se permitan passwords acá.
                         'password' => bin2hex(random_bytes(8)),
                     ],
                 ];
 
-                $this->client->request('POST', '/users.json', $payload, [], $context);
+                $createRes = $this->client->request('POST', '/users.json', $payload, [], $adminContext);
 
-                // Si creó OK, usamos switch-user
-                return ['login' => $login, 'extraDescription' => null];
+                $createdUser = $createRes['user'] ?? null;
+                $userId = is_array($createdUser) ? ((int) ($createdUser['id'] ?? 0)) : 0;
+
+                $this->logger->info('redmine.userResolver.user_created', [
+                    'correlation_id' => $context->correlationId,
+                    'login' => $login,
+                    'userId' => $userId,
+                ]);
+
+                return ['login' => $login, 'extraDescription' => null, 'userId' => $userId ?: null];
             } catch (\Throwable $e) {
-                // Si no pudo crear, NO devolvemos login (evita 404 por switch-user a user inexistente)
                 $this->logger->error('redmine.userResolver.user_create_failed', [
                     'correlation_id' => $context->correlationId,
                     'login' => $login,
@@ -96,11 +102,17 @@ final class RedmineUserResolver
                     'code' => $e->getCode(),
                     'errors' => property_exists($e, 'errors') ? $e->errors : null,
                 ]);
-                return ['login' => null, 'extraDescription' => null];
+
+                $extra = "Contacto (usuario interno, creacion en Redmine fallida):\n"
+                    . "Nombre: " . trim($nombre . ' ' . $apellido) . "\n"
+                    . "Email: " . ($email !== '' ? $email : '-') . "\n"
+                    . "Login: " . $login;
+
+                return ['login' => $login, 'extraDescription' => $extra, 'userId' => null];
             }
         }
 
-        // 3) Externo: ticket a nombre de fallbackUserLogin (si querés forzarlo)
+        // 3) Externo: ticket a nombre de fallbackUserLogin
         $extra = null;
         if ($email !== '' || $nombre !== '' || $apellido !== '') {
             $extra = "Contacto:\n"
@@ -109,9 +121,7 @@ final class RedmineUserResolver
                 . "Login: " . $login;
         }
 
-        // Si querés que sea a nombre de redminecrm, devolvés el fallback login.
-        // Si tu Redmine NO permite impersonation, poné null acá.
-        return ['login' => $this->config->fallbackUserLogin ?: null, 'extraDescription' => $extra];
+        return ['login' => $this->config->fallbackUserLogin ?: null, 'extraDescription' => $extra, 'userId' => null];
     }
 
 

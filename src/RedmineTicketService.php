@@ -6,6 +6,7 @@ namespace Famiq\RedmineBridge;
 
 use Famiq\RedmineBridge\DTO\AdjuntoDTO;
 use Famiq\RedmineBridge\DTO\AdjuntoInlineDTO;
+use Famiq\RedmineBridge\DTO\ContactDTO;
 use Famiq\RedmineBridge\DTO\CrearAdjuntoResult;
 use Famiq\RedmineBridge\DTO\CrearMensajeResult;
 use Famiq\RedmineBridge\DTO\CrearTicketResult;
@@ -16,6 +17,7 @@ use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\Exceptions\MissingRequiredCustomFieldsException;
 use Famiq\RedmineBridge\Exceptions\RedmineAuthException;
 use Famiq\RedmineBridge\Exceptions\RedmineTransportException;
+use Famiq\RedmineBridge\Exceptions\RedmineValidationException;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -39,6 +41,12 @@ final class RedmineTicketService
         $resolved = $this->resolveUser($context);
         $login = $resolved['login'];
         $extraDescription = $resolved['extraDescription'];
+        $userId = $resolved['userId'] ?? null;
+
+        // Si tenemos userId, asegurar membership en el proyecto
+        if ($userId !== null) {
+            $this->ensureUserHasProjectMembershipById($projectId, $userId, $context);
+        }
 
         if ($extraDescription !== null) {
             $ticket = clone $ticket;
@@ -46,6 +54,11 @@ final class RedmineTicketService
         }
 
         $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+
+        // Asignar el ticket al usuario resuelto
+        if ($userId !== null) {
+            $payload['issue']['assigned_to_id'] = $userId;
+        }
 
         if ($ticket->adjuntos !== []) {
             $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
@@ -80,6 +93,11 @@ final class RedmineTicketService
         $resolved = $this->resolveUser($context);
         $login = $resolved['login'];
         $extraDescription = $resolved['extraDescription'];
+        $userId = $resolved['userId'] ?? null;
+
+        if ($userId !== null) {
+            $this->ensureUserHasProjectMembershipById($projectId, $userId, $context);
+        }
 
         if ($extraDescription !== null) {
             $ticket = clone $ticket;
@@ -408,21 +426,30 @@ final class RedmineTicketService
         $resolved = $this->resolveUser($context);
         $login = $resolved['login'];
         $extraDescription = $resolved['extraDescription'];
+        $userId = $resolved['userId'] ?? null;
+
+        if ($userId !== null) {
+            $this->ensureUserHasProjectMembershipById($projectId, $userId, $context);
+        }
 
         if ($extraDescription !== null) {
             $description = $description . "\n\n" . $extraDescription;
         }
 
-        $payload = [
-            'issue' => array_filter([
-                'project_id' => $projectId,
-                'tracker_id' => $trackerId,
-                'subject' => $subject,
-                'description' => $description,
-                'custom_fields' => $this->buildCustomFields($customFields),
-                'start_date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
-            ], static fn($value) => $value !== null && $value !== []),
-        ];
+        $issueData = array_filter([
+            'project_id' => $projectId,
+            'tracker_id' => $trackerId,
+            'subject' => $subject,
+            'description' => $description,
+            'custom_fields' => $this->buildCustomFields($customFields),
+            'start_date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+        ], static fn($value) => $value !== null && $value !== []);
+
+        if ($userId !== null) {
+            $issueData['assigned_to_id'] = $userId;
+        }
+
+        $payload = ['issue' => $issueData];
 
         $headers = [];
         if ($login !== null) {
@@ -507,6 +534,103 @@ final class RedmineTicketService
 
             throw $e;
         }
+    }
+
+    /**
+     * Intenta crear via /helpdesk_tickets.json; si falla con 404 (plugin
+     * no disponible) o 403 (permisos), cae a /issues.json via crearIssueCore().
+     */
+    public function crearHelpdeskTicketConFallback(
+        TicketDTO $ticket,
+        string|ContactDTO $contact,
+        int $projectId,
+        int $trackerId,
+        RequestContext $context,
+        ?int $contactId = null,
+    ): CrearTicketResult {
+        try {
+            return $this->crearHelpdeskTicket($ticket, $contact, $projectId, $trackerId, $context);
+        } catch (RedmineValidationException $e) {
+            if ((int) $e->getCode() !== 404) {
+                throw $e;
+            }
+
+            $this->logger->warning('redmine.helpdesk.fallback_to_issues', [
+                'correlation_id' => $context->correlationId,
+                'code' => $e->getCode(),
+                'message' => $e->getMessage(),
+            ]);
+        } catch (RedmineAuthException $e) {
+            if (!in_array((int) $e->getCode(), [403, 404], true)) {
+                throw $e;
+            }
+
+            $this->logger->warning('redmine.helpdesk.fallback_to_issues.auth', [
+                'correlation_id' => $context->correlationId,
+                'code' => $e->getCode(),
+                'message' => $e->getMessage(),
+            ]);
+        }
+
+        // Fallback: crear via /issues.json
+        $this->logger->info('redmine.issues.fallback.start', [
+            'correlation_id' => $context->correlationId,
+            'projectId' => $projectId,
+            'trackerId' => $trackerId,
+        ]);
+
+        $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
+        $contactInfo = '';
+        if ($contactEmail !== '') {
+            $contactInfo = "\n\n---\nContacto: " . $contactEmail;
+        }
+
+        $customFieldsById = [];
+        foreach ($ticket->customFields as $key => $value) {
+            if (is_array($value) && isset($value['id'], $value['value'])) {
+                $customFieldsById[(int) $value['id']] = $value['value'];
+            } elseif (is_int($key) || (is_string($key) && ctype_digit($key))) {
+                $customFieldsById[(int) $key] = $value;
+            }
+        }
+
+        $response = $this->crearIssueCore(
+            $projectId,
+            $trackerId,
+            $ticket->subject,
+            $ticket->description . $contactInfo,
+            $customFieldsById,
+            $context,
+        );
+
+        $issue = $response['issue'] ?? null;
+        $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+
+        if ($issueId === 0) {
+            $issueId = (int) ($response['id'] ?? 0);
+        }
+
+        // Best-effort: asociar contacto al issue si tenemos contactId
+        if ($contactId !== null && $contactId > 0 && $issueId > 0) {
+            try {
+                $this->client->request(
+                    'PUT',
+                    sprintf('/issues/%d.json', $issueId),
+                    ['issue' => ['contact_id' => $contactId]],
+                    [],
+                    $context,
+                );
+            } catch (\Throwable $e) {
+                $this->logger->warning('redmine.issues.fallback.contact_assign_failed', [
+                    'correlation_id' => $context->correlationId,
+                    'issueId' => $issueId,
+                    'contactId' => $contactId,
+                    'error' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        return new CrearTicketResult($issueId);
     }
 
     /**
@@ -723,13 +847,13 @@ final class RedmineTicketService
     }
 
     /**
-     * @return array{login: ?string, extraDescription: ?string}
+     * @return array{login: ?string, extraDescription: ?string, userId: ?int}
      */
     private function resolveUser(RequestContext $context): array
     {
         if ($this->userResolver === null || empty($context->idUsuario)) {
             $login = !empty($context->idUsuario) ? (string) $context->idUsuario : null;
-            return ['login' => $login, 'extraDescription' => null];
+            return ['login' => $login, 'extraDescription' => null, 'userId' => null];
         }
 
         return $this->userResolver->resolveUserForTicket($context);
@@ -828,6 +952,9 @@ final class RedmineTicketService
         int $roleId,
         RequestContext $context
     ): void {
+        // Contexto sin Switch-User: membership es operacion admin
+        $adminContext = new RequestContext($context->correlationId);
+
         $this->logger->info('redmine.crm_membership.ensure.start', [
             'correlation_id' => $context->correlationId,
             'login' => $login,
@@ -835,7 +962,7 @@ final class RedmineTicketService
             'role_id' => $roleId,
         ]);
 
-        $userId = $this->resolveUserIdByLogin($login, $context);
+        $userId = $this->resolveUserIdByLogin($login, $adminContext);
         if ($userId === null) {
             $this->logger->error('redmine.crm_membership.ensure.user_not_found', [
                 'correlation_id' => $context->correlationId,
@@ -844,7 +971,7 @@ final class RedmineTicketService
             return;
         }
 
-        if ($this->isUserMemberOfProject($projectIdentifier, $userId, $context)) {
+        if ($this->isUserMemberOfProject($projectIdentifier, $userId, $adminContext)) {
             $this->logger->info('redmine.crm_membership.ensure.already_member', [
                 'correlation_id' => $context->correlationId,
                 'login' => $login,
@@ -869,7 +996,7 @@ final class RedmineTicketService
             'role_id' => $roleId,
         ]);
 
-        $this->client->request('POST', $path, $payload, [], $context);
+        $this->client->request('POST', $path, $payload, [], $adminContext);
 
         $this->logger->info('redmine.crm_membership.ensure.create.ok', [
             'correlation_id' => $context->correlationId,
@@ -877,6 +1004,59 @@ final class RedmineTicketService
             'project' => $projectIdentifier,
             'role_id' => $roleId,
         ]);
+    }
+
+    /**
+     * Asegura que el usuario (por ID numerico) sea miembro del proyecto (por ID numerico).
+     * Usa el role CRM_PROJECT_ROLE_ID por defecto. Best-effort: no lanza excepciones.
+     */
+    private function ensureUserHasProjectMembershipById(int $projectId, int $userId, RequestContext $context): void
+    {
+        // Contexto sin Switch-User: membership es operacion admin
+        $adminContext = new RequestContext($context->correlationId);
+
+        try {
+            $path = sprintf('/projects/%d/memberships.json', $projectId);
+
+            // Verificar si ya es miembro
+            $response = $this->client->request('GET', $path, null, [], $adminContext);
+            $memberships = $response['memberships'] ?? [];
+            if (is_array($memberships)) {
+                foreach ($memberships as $m) {
+                    if (!is_array($m)) {
+                        continue;
+                    }
+                    $user = $m['user'] ?? null;
+                    if (is_array($user) && isset($user['id']) && (int) $user['id'] === $userId) {
+                        return; // ya es miembro
+                    }
+                }
+            }
+
+            // Crear membership
+            $payload = [
+                'membership' => [
+                    'user_id' => $userId,
+                    'role_ids' => [self::CRM_PROJECT_ROLE_ID],
+                ],
+            ];
+
+            $this->client->request('POST', $path, $payload, [], $adminContext);
+
+            $this->logger->info('redmine.project_membership.created', [
+                'correlation_id' => $context->correlationId,
+                'user_id' => $userId,
+                'project_id' => $projectId,
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.project_membership.error', [
+                'correlation_id' => $context->correlationId,
+                'user_id' => $userId,
+                'project_id' => $projectId,
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+            ]);
+        }
     }
 
     private function resolveUserIdByLogin(string $login, RequestContext $context): ?int

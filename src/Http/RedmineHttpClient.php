@@ -36,6 +36,8 @@ final class RedmineHttpClient
     public function request(string $method, string $path, array|string|null $body, array $headers, ?RequestContext $context): array
     {
         $url = $this->resolveUrl($path);
+
+        // 1) primer intento (con switch-user si aplica)
         $request = $this->createRequest($method, $url, $body, $headers, $context);
 
         $this->logger->info('redmine.request', [
@@ -46,6 +48,35 @@ final class RedmineHttpClient
 
         try {
             $response = $this->client->sendRequest($request);
+            return $this->handleResponse($response, $context);
+        } catch (RedmineAuthException $e) {
+            // 2) fallback: si es 412 y veníamos con switch-user, reintento sin switch-user
+            if ((int) $e->getCode() === 412 && $this->hasSwitchUser($headers, $context)) {
+                $this->logger->warning('redmine.switch_user.retry_without_switch_user', [
+                    'method' => $method,
+                    'url' => $url,
+                    'correlation_id' => $context?->correlationId,
+                    'switch_user' => $this->getSwitchUserValue($headers, $context),
+                ]);
+
+                $headersNoSwitch = $this->stripSwitchUserHeader($headers);
+                $contextNoSwitch = $this->cloneContextWithoutSwitchUser($context);
+
+                $retryRequest = $this->createRequest($method, $url, $body, $headersNoSwitch, $contextNoSwitch);
+
+                try {
+                    $retryResponse = $this->client->sendRequest($retryRequest);
+                    return $this->handleResponse($retryResponse, $contextNoSwitch);
+                } catch (ClientExceptionInterface $exception) {
+                    $this->logger->error('redmine.transport_error', [
+                        'message' => $exception->getMessage(),
+                        'correlation_id' => $context?->correlationId,
+                    ]);
+                    throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
+                }
+            }
+
+            throw $e;
         } catch (ClientExceptionInterface $exception) {
             $this->logger->error('redmine.transport_error', [
                 'message' => $exception->getMessage(),
@@ -53,8 +84,6 @@ final class RedmineHttpClient
             ]);
             throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
         }
-
-        return $this->handleResponse($response, $context);
     }
 
     /**
@@ -64,6 +93,8 @@ final class RedmineHttpClient
     public function requestRaw(string $method, string $path, array|string|null $body, array $headers, ?RequestContext $context): string
     {
         $url = $this->resolveUrl($path);
+
+        // 1) primer intento
         $request = $this->createRequest($method, $url, $body, $headers, $context);
 
         $this->logger->info('redmine.request', [
@@ -74,6 +105,35 @@ final class RedmineHttpClient
 
         try {
             $response = $this->client->sendRequest($request);
+            return $this->handleRawResponse($response, $context);
+        } catch (RedmineAuthException $e) {
+            // 2) fallback 412
+            if ((int) $e->getCode() === 412 && $this->hasSwitchUser($headers, $context)) {
+                $this->logger->warning('redmine.switch_user.retry_without_switch_user', [
+                    'method' => $method,
+                    'url' => $url,
+                    'correlation_id' => $context?->correlationId,
+                    'switch_user' => $this->getSwitchUserValue($headers, $context),
+                ]);
+
+                $headersNoSwitch = $this->stripSwitchUserHeader($headers);
+                $contextNoSwitch = $this->cloneContextWithoutSwitchUser($context);
+
+                $retryRequest = $this->createRequest($method, $url, $body, $headersNoSwitch, $contextNoSwitch);
+
+                try {
+                    $retryResponse = $this->client->sendRequest($retryRequest);
+                    return $this->handleRawResponse($retryResponse, $contextNoSwitch);
+                } catch (ClientExceptionInterface $exception) {
+                    $this->logger->error('redmine.transport_error', [
+                        'message' => $exception->getMessage(),
+                        'correlation_id' => $context?->correlationId,
+                    ]);
+                    throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
+                }
+            }
+
+            throw $e;
         } catch (ClientExceptionInterface $exception) {
             $this->logger->error('redmine.transport_error', [
                 'message' => $exception->getMessage(),
@@ -81,8 +141,67 @@ final class RedmineHttpClient
             ]);
             throw new RedmineTransportException($exception->getMessage(), (int) $exception->getCode(), $exception);
         }
+    }
 
-        return $this->handleRawResponse($response, $context);
+    /**
+     * @param array<string, string> $headers
+     */
+    private function hasSwitchUser(array $headers, ?RequestContext $context): bool
+    {
+        if ($context !== null && $context->switchUser !== null && trim((string) $context->switchUser) !== '') {
+            return true;
+        }
+
+        foreach ($headers as $k => $v) {
+            if (strcasecmp($k, 'X-Redmine-Switch-User') === 0 && trim((string) $v) !== '') {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @param array<string, string> $headers
+     */
+    private function getSwitchUserValue(array $headers, ?RequestContext $context): ?string
+    {
+        if ($context !== null && $context->switchUser !== null && trim((string) $context->switchUser) !== '') {
+            return (string) $context->switchUser;
+        }
+
+        foreach ($headers as $k => $v) {
+            if (strcasecmp($k, 'X-Redmine-Switch-User') === 0 && trim((string) $v) !== '') {
+                return (string) $v;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * @param array<string, string> $headers
+     * @return array<string, string>
+     */
+    private function stripSwitchUserHeader(array $headers): array
+    {
+        $out = [];
+        foreach ($headers as $k => $v) {
+            if (strcasecmp($k, 'X-Redmine-Switch-User') === 0) {
+                continue;
+            }
+            $out[$k] = $v;
+        }
+        return $out;
+    }
+
+    private function cloneContextWithoutSwitchUser(?RequestContext $context): ?RequestContext
+    {
+        if ($context === null) {
+            return null;
+        }
+
+        return new RequestContext($context->correlationId, null);
     }
 
     /**

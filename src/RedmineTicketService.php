@@ -195,12 +195,6 @@ final class RedmineTicketService
             $payload['helpdesk_ticket']['contact_id'] = $contactDTO->id;
         }
 
-        $this->logger->error('redmine.helpdesk.create.payload', [
-            'correlation_id' => $context->correlationId,
-            'payload' => $payload,
-            'switch_user' => $login,
-        ]);
-
         try {
             $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
 

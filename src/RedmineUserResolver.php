@@ -4,7 +4,6 @@ declare(strict_types=1);
 
 namespace Famiq\RedmineBridge;
 
-use Famiq\RedmineBridge\Exceptions\RedmineValidationException;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
@@ -122,103 +121,5 @@ final class RedmineUserResolver
         }
 
         return ['login' => $this->config->fallbackUserLogin ?: null, 'extraDescription' => $extra, 'userId' => null];
-    }
-
-
-    private function userExists(string $login, RequestContext $context): bool
-    {
-        try {
-            $response = $this->client->request(
-                'GET',
-                '/users.json?' . http_build_query(['name' => $login, 'limit' => 1]),
-                null,
-                [],
-                $context,
-            );
-
-            $users = $response['users'] ?? [];
-
-            if (!is_array($users)) {
-                return false;
-            }
-
-            foreach ($users as $user) {
-                if (is_array($user) && ($user['login'] ?? null) === $login) {
-                    return true;
-                }
-            }
-
-            return false;
-        } catch (RedmineValidationException) {
-            return false;
-        }
-    }
-
-    private function createUser(RequestContext $context): void
-    {
-        $login = (string) $context->idUsuario;
-        $email = (string) $context->emailUsuario;
-        $firstName = $context->nombreUsuario ?? $login;
-        $lastName = $context->apellidoUsuario ?? $login;
-
-        $payload = [
-            'user' => [
-                'login' => $login,
-                'firstname' => $firstName,
-                'lastname' => $lastName,
-                'mail' => $email,
-                'password' => bin2hex(random_bytes(16)),
-            ],
-        ];
-
-        $this->logger->info('redmine.create_user', [
-            'login' => $login,
-            'email' => $email,
-            'correlation_id' => $context->correlationId,
-        ]);
-
-        $this->client->request('POST', '/users.json', $payload, [], $context);
-    }
-
-    private function isInternalEmail(string $email): bool
-    {
-        $emailLower = strtolower($email);
-        $allDomains = array_merge(
-            [$this->config->internalEmailDomain],
-            $this->config->internalEmailDomains,
-        );
-
-        foreach ($allDomains as $domain) {
-            $atDomain = '@' . ltrim(strtolower($domain), '@');
-            if (str_ends_with($emailLower, $atDomain)) {
-                return true;
-            }
-        }
-
-        return false;
-    }
-
-    private function buildExternalUserDescription(RequestContext $context): string
-    {
-        $parts = [];
-        $parts[] = '---';
-        $parts[] = 'Contacto del autor original:';
-
-        if ($context->nombreUsuario !== null || $context->apellidoUsuario !== null) {
-            $name = trim(($context->nombreUsuario ?? '') . ' ' . ($context->apellidoUsuario ?? ''));
-            if ($name !== '') {
-                $parts[] = 'Nombre: ' . $name;
-            }
-        }
-
-        if ($context->emailUsuario !== null) {
-            $parts[] = 'Email: ' . $context->emailUsuario;
-        }
-
-        if ($context->idUsuario !== null) {
-            $parts[] = 'Usuario: ' . $context->idUsuario;
-        }
-
-        return implode("\n", $parts);
     }
 }

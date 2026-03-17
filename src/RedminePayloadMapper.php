@@ -26,6 +26,7 @@ final class RedminePayloadMapper
                 'priority_id' => $ticket->prioridad,
                 'category_id' => $ticket->categoria,
                 'custom_fields' => $customFields,
+                'estimated_hours' => $ticket->estimatedHours,
             ], static fn ($value) => $value !== null && $value !== []),
         ];
     }

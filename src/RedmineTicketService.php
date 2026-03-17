@@ -173,6 +173,10 @@ final class RedmineTicketService
         // Redmine start_date admite solo YYYY-MM-DD (sin hora)
         $issueBlock['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
 
+        if ($ticket->estimatedHours !== null) {
+            $issueBlock['estimated_hours'] = $ticket->estimatedHours;
+        }
+
         if ($ticket->adjuntos !== []) {
             $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
             $issueBlock['uploads'] = $uploads;
@@ -416,6 +420,7 @@ final class RedmineTicketService
         string $description,
         array $customFields,
         RequestContext $context,
+        ?float $estimatedHours = null,
     ): array {
         $resolved = $this->resolveUser($context);
         $login = $resolved['login'];
@@ -437,6 +442,7 @@ final class RedmineTicketService
             'description' => $description,
             'custom_fields' => $this->buildCustomFields($customFields),
             'start_date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+            'estimated_hours' => $estimatedHours,
         ], static fn($value) => $value !== null && $value !== []);
 
         if ($userId !== null) {
@@ -703,6 +709,10 @@ final class RedmineTicketService
         }
 
         $payload['issue']['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
+
+        if ($ticket->estimatedHours !== null) {
+            $payload['issue']['estimated_hours'] = $ticket->estimatedHours;
+        }
 
         return $payload;
     }

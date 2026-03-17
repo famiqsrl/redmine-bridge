@@ -20,6 +20,7 @@ final class TicketDTO
         public ?string $clienteRef = null,
         public array $customFields = [],
         public array $adjuntos = [],
+        public ?float $estimatedHours = null,
     ) {
     }
 }

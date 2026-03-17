@@ -228,6 +228,7 @@ final class RedmineBridge
         string $description,
         array $customFields = [],
         ?RequestContext $context = null,
+        ?float $estimatedHours = null,
     ): array {
         return $this->ticketService->crearIssueCore(
             $projectId,
@@ -236,6 +237,7 @@ final class RedmineBridge
             $description,
             $customFields,
             $this->resolveContext($context),
+            $estimatedHours,
         );
     }
 

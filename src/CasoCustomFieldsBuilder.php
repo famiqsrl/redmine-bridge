@@ -14,10 +14,7 @@ final class CasoCustomFieldsBuilder
     public const CF_MOTIVO_RECLAMO_ID = 7;
     public const CF_MOTIVO_SOLICITUD_ID = 8;
     public const CF_FORMA_CONTACTO_ID = 9;
-    public const CF_MOTIVO_RESOLUCION_ID = 10;
-
     public const CF_FORMA_CONTACTO_VALUE = 'PIN';
-    public const CF_MOTIVO_RESOLUCION_VALUE = '105';
 
     public const CF_CREADO_POR_FAMIQ_YES = 1;
     public const CF_CREADO_POR_FAMIQ_NO = 0;
@@ -31,7 +28,6 @@ final class CasoCustomFieldsBuilder
 
     private const ALLOWED_SMALL_IDS = [
         self::CF_FORMA_CONTACTO_ID,
-        self::CF_MOTIVO_RESOLUCION_ID,
         self::CF_MOTIVO_CONSULTA_ID,
         self::CF_MOTIVO_RECLAMO_ID,
         self::CF_MOTIVO_SOLICITUD_ID,
@@ -189,21 +185,6 @@ final class CasoCustomFieldsBuilder
         'X20' => '92',
     ];
 
-    private const ENUM_MOTIVO_RESOLUCION = [
-        'Anulamos el pedido' => '102',
-        'Coordinamos la inspección' => '103',
-        'Enviamos la documentación solicitada' => '104',
-        'Enviamos la información solicitada' => '105',
-        'Gestionamos la devolución' => '106',
-        'Gestionamos la nota de crédito' => '107',
-        'Informamos el estado del pedido al cliente' => '108',
-        'Infor el est del pedido, gestionando con el área corresp' => '109',
-        'Ingresamos los datos solicitados' => '110',
-        'Negociamos la resolución del problema con el cliente' => '111',
-        'Reprogramamos la devolución' => '112',
-        'Reprogramamos la entrega' => '113',
-    ];
-
     public function buildForCaso(
         ?int $casoId,
         ?string $tipoAyuda,
@@ -232,7 +213,6 @@ final class CasoCustomFieldsBuilder
 
         $customFields = [
             ['id' => self::CF_FORMA_CONTACTO_ID, 'value' => self::CF_FORMA_CONTACTO_VALUE],
-            ['id' => self::CF_MOTIVO_RESOLUCION_ID, 'value' => self::CF_MOTIVO_RESOLUCION_VALUE],
             ['id' => self::CF_CREADO_POR_FAMIQ_ID, 'value' => $esFamiq ? self::CF_CREADO_POR_FAMIQ_YES : self::CF_CREADO_POR_FAMIQ_NO],
         ];
 
@@ -367,10 +347,6 @@ final class CasoCustomFieldsBuilder
                     self::CF_MOTIVO_SOLICITUD_ID => self::ENUM_MOTIVO_SOLICITUD_BY_CODE[$code] ?? null,
                     default => null,
                 };
-            }
-
-            if ($cfId === self::CF_MOTIVO_RESOLUCION_ID) {
-                return self::ENUM_MOTIVO_RESOLUCION[$t] ?? null;
             }
 
             return $value;

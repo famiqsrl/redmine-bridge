@@ -19,6 +19,7 @@ final class RedmineConfig
         public string $internalEmailDomain = 'famiq.com.ar',
         /** @var string[] Dominios internos adicionales que permiten crear usuarios en Redmine */
         public array $internalEmailDomains = ['famiq.com.uy'],
+        public int $portalGroupId = 100,
     ) {
     }
 }

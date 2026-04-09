@@ -1011,6 +1011,21 @@ final class RedmineTicketService
     }
 
     /**
+     * Asociación de usuario a grupo en Redmine.
+     * Operación administrativa: se ejecuta sin switch-user.
+     *
+     * @return array<string, mixed>
+     */
+    public function asociarUsuarioAGrupo(int $userId, int $group, RequestContext $context): array
+    {
+        $adminContext = new RequestContext($context->correlationId);
+
+        $payload = ['user_id' => $userId];
+
+        return $this->client->request('POST', sprintf('/groups/%d/users.json', $group), $payload, [], $adminContext);
+    }
+
+    /**
      * Asegura que el usuario (por ID numerico) sea miembro del proyecto (por ID numerico).
      * Usa el role CRM_PROJECT_ROLE_ID por defecto. Best-effort: no lanza excepciones.
      */

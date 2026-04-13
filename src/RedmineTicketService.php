@@ -1169,4 +1169,14 @@ final class RedmineTicketService
 
         return new CrearTicketResult($issueId);
     }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerHelpdeskTicket(int $ticketId, RequestContext $context): array
+    {
+        $path = sprintf('/helpdesk_tickets/%d.json', $ticketId);
+        return $this->client->request('GET', $path, null, [], $context);
+    }
 }
+

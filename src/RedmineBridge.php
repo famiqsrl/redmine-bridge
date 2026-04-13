@@ -279,6 +279,14 @@ final class RedmineBridge
         return $this->ticketService->obtenerAttachmentInfo($attachmentId, $this->resolveContext($context));
     }
 
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerHelpdeskTicket(int $ticketId, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->obtenerHelpdeskTicket($ticketId, $this->resolveContext($context));
+    }
+
     public function descargarContenido(string $url, ?RequestContext $context = null): string
     {
         return $this->ticketService->descargarContenido($url, $this->resolveContext($context));

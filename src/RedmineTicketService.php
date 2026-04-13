@@ -43,39 +43,46 @@ final class RedmineTicketService
         $extraDescription = $resolved['extraDescription'];
         $userId = $resolved['userId'] ?? null;
 
-        // Si tenemos userId, asegurar membership en el proyecto
+        // Si tenemos userId, asegurar membership en el proyecto y asociar al grupo portal
         if ($userId !== null) {
             $this->ensureUserHasProjectMembershipById($projectId, $userId, $context);
+            $this->asociarUsuarioAGrupoPortal($userId, $context);
         }
 
-        if ($extraDescription !== null) {
-            $ticket = clone $ticket;
-            $ticket->description = $ticket->description . "\n\n" . $extraDescription;
+        try {
+            if ($extraDescription !== null) {
+                $ticket = clone $ticket;
+                $ticket->description = $ticket->description . "\n\n" . $extraDescription;
+            }
+
+            $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+
+            // Asignar el ticket al usuario resuelto
+            if ($userId !== null) {
+                $payload['issue']['assigned_to_id'] = $userId;
+            }
+
+            if ($ticket->adjuntos !== []) {
+                $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
+                $payload['issue']['uploads'] = $uploads;
+            }
+
+            $headers = [];
+
+            if ($login !== null) {
+                $headers['X-Redmine-Switch-User'] = $login;
+            }
+
+            $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
+
+            $issue = $response['issue'] ?? null;
+            $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
+            return new CrearTicketResult($issueId);
+        } finally {
+            if ($userId !== null) {
+                $this->desasociarUsuarioDeGrupoPortal($userId, $context);
+            }
         }
-
-        $payload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
-
-        // Asignar el ticket al usuario resuelto
-        if ($userId !== null) {
-            $payload['issue']['assigned_to_id'] = $userId;
-        }
-
-        if ($ticket->adjuntos !== []) {
-            $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
-            $payload['issue']['uploads'] = $uploads;
-        }
-
-        $headers = [];
-
-        if ($login !== null) {
-            $headers['X-Redmine-Switch-User'] = $login;
-        }
-
-        $response = $this->client->request('POST', '/issues.json', $payload, $headers, $context);
-
-        $issue = $response['issue'] ?? null;
-        $issueId = is_array($issue) ? (int) ($issue['id'] ?? 0) : 0;
-        return new CrearTicketResult($issueId);
     }
 
     public function crearHelpdeskTicket(
@@ -97,150 +104,157 @@ final class RedmineTicketService
 
         if ($userId !== null) {
             $this->ensureUserHasProjectMembershipById($projectId, $userId, $context);
-        }
-
-        if ($extraDescription !== null) {
-            $ticket = clone $ticket;
-            $ticket->description = $ticket->description . "\n\n" . $extraDescription;
+            $this->asociarUsuarioAGrupoPortal($userId, $context);
         }
 
         try {
-            $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
-        } catch (\Throwable $e) {
-            $this->logger->warning('redmine.helpdesk.buildIssuePayload.fallback', [
-                'correlation_id' => $context->correlationId,
-                'error' => get_class($e),
-                'message' => $e->getMessage(),
-                'code' => $e->getCode(),
-            ]);
-
-            $issuePayload = ['issue' => []];
-        }
-
-        $issueBlock = $issuePayload['issue'] ?? [];
-        $payloadCfs = $issueBlock['custom_fields'] ?? [];
-        if (!is_array($payloadCfs)) {
-            $payloadCfs = [];
-        }
-
-        $dtoCfs = [];
-        foreach ($ticket->customFields as $cf) {
-            $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
-            $value = is_array($cf) ? ($cf['value'] ?? null) : null;
-            if ($id > 0 && $value !== null) {
-                $dtoCfs[$id] = $value;
+            if ($extraDescription !== null) {
+                $ticket = clone $ticket;
+                $ticket->description = $ticket->description . "\n\n" . $extraDescription;
             }
-        }
 
-        $mergedById = [];
-
-        foreach ($payloadCfs as $cf) {
-            if (!is_array($cf)) {
-                continue;
-            }
-            $id = (int) ($cf['id'] ?? 0);
-            if ($id <= 0) {
-                continue;
-            }
-            $mergedById[$id] = $cf['value'] ?? null;
-        }
-
-        foreach ($dtoCfs as $id => $value) {
-            $mergedById[(int) $id] = $value;
-        }
-
-        $finalCfs = [];
-        foreach ($mergedById as $id => $value) {
-            if ((int) $id <= 0 || $value === null || $value === []) {
-                continue;
-            }
-            $finalCfs[] = ['id' => (int) $id, 'value' => $value];
-        }
-
-        if ($finalCfs !== []) {
-            $issueBlock['custom_fields'] = array_values($finalCfs);
-        }
-
-        $issueBlock['project_id'] = $issueBlock['project_id'] ?? $projectId;
-        $issueBlock['tracker_id'] = $issueBlock['tracker_id'] ?? $trackerId;
-        $issueBlock['subject'] = $issueBlock['subject'] ?? $ticket->subject;
-        $issueBlock['description'] = $issueBlock['description'] ?? $ticket->description;
-
-        if ($ticket->prioridad !== null && !isset($issueBlock['priority_id'])) {
-            $issueBlock['priority_id'] = $ticket->prioridad;
-        }
-
-        // Redmine start_date admite solo YYYY-MM-DD (sin hora)
-        $issueBlock['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
-
-        if ($ticket->estimatedHours !== null) {
-            $issueBlock['estimated_hours'] = $ticket->estimatedHours;
-        }
-
-        if ($ticket->adjuntos !== []) {
-            $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
-            $issueBlock['uploads'] = $uploads;
-        }
-
-        $headers = [];
-
-        if ($login !== null) {
-            $headers['X-Redmine-Switch-User'] = $login;
-        }
-
-        $payload = [
-            'helpdesk_ticket' => [
-                'issue' => array_filter($issueBlock, static fn($v) => $v !== null && $v !== []),
-                'contact' => $contactDTO->toPayloadArray(),
-            ],
-        ];
-
-        if ($contactDTO->id !== null && $contactDTO->id > 0) {
-            $payload['helpdesk_ticket']['contact_id'] = $contactDTO->id;
-        }
-
-        try {
-            $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
-
-            return $this->parseHelpdeskTicketResponse($response);
-        } catch (RedmineAuthException $e) {
-            $this->logger->error('redmine.helpdesk.create.auth_error', [
-                'correlation_id' => $context->correlationId,
-                'switch_user' => $login,
-                'code' => $e->getCode(),
-                'message' => $e->getMessage(),
-            ]);
-
-            if ($e->getCode() === 412) {
-                $this->logger->error('redmine.helpdesk.create.retry_without_switch_user', [
+            try {
+                $issuePayload = $this->buildIssuePayload($ticket, $projectId, $trackerId, $context);
+            } catch (\Throwable $e) {
+                $this->logger->warning('redmine.helpdesk.buildIssuePayload.fallback', [
                     'correlation_id' => $context->correlationId,
-                    'original_switch_user' => $login,
+                    'error' => get_class($e),
+                    'message' => $e->getMessage(),
+                    'code' => $e->getCode(),
                 ]);
 
-                $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, [], $context);
-
-                return $this->parseHelpdeskTicketResponse($response);
+                $issuePayload = ['issue' => []];
             }
 
-            if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
-                $this->ensureUserHasProjectMembership(
-                    projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
-                    login: $login,
-                    roleId: self::CRM_PROJECT_ROLE_ID,
-                    context: $context
-                );
+            $issueBlock = $issuePayload['issue'] ?? [];
+            $payloadCfs = $issueBlock['custom_fields'] ?? [];
+            if (!is_array($payloadCfs)) {
+                $payloadCfs = [];
+            }
 
-                $this->logger->info('redmine.helpdesk.create.retry_after_membership', [
-                    'correlation_id' => $context->correlationId,
-                    'switch_user' => $login,
-                ]);
+            $dtoCfs = [];
+            foreach ($ticket->customFields as $cf) {
+                $id = is_array($cf) ? (int) ($cf['id'] ?? 0) : 0;
+                $value = is_array($cf) ? ($cf['value'] ?? null) : null;
+                if ($id > 0 && $value !== null) {
+                    $dtoCfs[$id] = $value;
+                }
+            }
 
+            $mergedById = [];
+
+            foreach ($payloadCfs as $cf) {
+                if (!is_array($cf)) {
+                    continue;
+                }
+                $id = (int) ($cf['id'] ?? 0);
+                if ($id <= 0) {
+                    continue;
+                }
+                $mergedById[$id] = $cf['value'] ?? null;
+            }
+
+            foreach ($dtoCfs as $id => $value) {
+                $mergedById[(int) $id] = $value;
+            }
+
+            $finalCfs = [];
+            foreach ($mergedById as $id => $value) {
+                if ((int) $id <= 0 || $value === null || $value === []) {
+                    continue;
+                }
+                $finalCfs[] = ['id' => (int) $id, 'value' => $value];
+            }
+
+            if ($finalCfs !== []) {
+                $issueBlock['custom_fields'] = array_values($finalCfs);
+            }
+
+            $issueBlock['project_id'] = $issueBlock['project_id'] ?? $projectId;
+            $issueBlock['tracker_id'] = $issueBlock['tracker_id'] ?? $trackerId;
+            $issueBlock['subject'] = $issueBlock['subject'] ?? $ticket->subject;
+            $issueBlock['description'] = $issueBlock['description'] ?? $ticket->description;
+
+            if ($ticket->prioridad !== null && !isset($issueBlock['priority_id'])) {
+                $issueBlock['priority_id'] = $ticket->prioridad;
+            }
+
+            // Redmine start_date admite solo YYYY-MM-DD (sin hora)
+            $issueBlock['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
+
+            if ($ticket->estimatedHours !== null) {
+                $issueBlock['estimated_hours'] = $ticket->estimatedHours;
+            }
+
+            if ($ticket->adjuntos !== []) {
+                $uploads = $this->uploadAdjuntosInline($ticket->adjuntos, $context);
+                $issueBlock['uploads'] = $uploads;
+            }
+
+            $headers = [];
+
+            if ($login !== null) {
+                $headers['X-Redmine-Switch-User'] = $login;
+            }
+
+            $payload = [
+                'helpdesk_ticket' => [
+                    'issue' => array_filter($issueBlock, static fn($v) => $v !== null && $v !== []),
+                    'contact' => $contactDTO->toPayloadArray(),
+                ],
+            ];
+
+            if ($contactDTO->id !== null && $contactDTO->id > 0) {
+                $payload['helpdesk_ticket']['contact_id'] = $contactDTO->id;
+            }
+
+            try {
                 $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
 
                 return $this->parseHelpdeskTicketResponse($response);
-            }
+            } catch (RedmineAuthException $e) {
+                $this->logger->error('redmine.helpdesk.create.auth_error', [
+                    'correlation_id' => $context->correlationId,
+                    'switch_user' => $login,
+                    'code' => $e->getCode(),
+                    'message' => $e->getMessage(),
+                ]);
 
-            throw $e;
+                if ($e->getCode() === 412) {
+                    $this->logger->error('redmine.helpdesk.create.retry_without_switch_user', [
+                        'correlation_id' => $context->correlationId,
+                        'original_switch_user' => $login,
+                    ]);
+
+                    $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, [], $context);
+
+                    return $this->parseHelpdeskTicketResponse($response);
+                }
+
+                if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
+                    $this->ensureUserHasProjectMembership(
+                        projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
+                        login: $login,
+                        roleId: self::CRM_PROJECT_ROLE_ID,
+                        context: $context
+                    );
+
+                    $this->logger->info('redmine.helpdesk.create.retry_after_membership', [
+                        'correlation_id' => $context->correlationId,
+                        'switch_user' => $login,
+                    ]);
+
+                    $response = $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+
+                    return $this->parseHelpdeskTicketResponse($response);
+                }
+
+                throw $e;
+            }
+        } finally {
+            if ($userId !== null) {
+                $this->desasociarUsuarioDeGrupoPortal($userId, $context);
+            }
         }
     }
 
@@ -429,34 +443,41 @@ final class RedmineTicketService
 
         if ($userId !== null) {
             $this->ensureUserHasProjectMembershipById($projectId, $userId, $context);
+            $this->asociarUsuarioAGrupoPortal($userId, $context);
         }
 
-        if ($extraDescription !== null) {
-            $description = $description . "\n\n" . $extraDescription;
+        try {
+            if ($extraDescription !== null) {
+                $description = $description . "\n\n" . $extraDescription;
+            }
+
+            $issueData = array_filter([
+                'project_id' => $projectId,
+                'tracker_id' => $trackerId,
+                'subject' => $subject,
+                'description' => $description,
+                'custom_fields' => $this->buildCustomFields($customFields),
+                'start_date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
+                'estimated_hours' => $estimatedHours,
+            ], static fn($value) => $value !== null && $value !== []);
+
+            if ($userId !== null) {
+                $issueData['assigned_to_id'] = $userId;
+            }
+
+            $payload = ['issue' => $issueData];
+
+            $headers = [];
+            if ($login !== null) {
+                $headers['X-Redmine-Switch-User'] = $login;
+            }
+
+            return $this->client->request('POST', '/issues.json', $payload, $headers, $context);
+        } finally {
+            if ($userId !== null) {
+                $this->desasociarUsuarioDeGrupoPortal($userId, $context);
+            }
         }
-
-        $issueData = array_filter([
-            'project_id' => $projectId,
-            'tracker_id' => $trackerId,
-            'subject' => $subject,
-            'description' => $description,
-            'custom_fields' => $this->buildCustomFields($customFields),
-            'start_date' => (new \DateTimeImmutable('now'))->format('Y-m-d'),
-            'estimated_hours' => $estimatedHours,
-        ], static fn($value) => $value !== null && $value !== []);
-
-        if ($userId !== null) {
-            $issueData['assigned_to_id'] = $userId;
-        }
-
-        $payload = ['issue' => $issueData];
-
-        $headers = [];
-        if ($login !== null) {
-            $headers['X-Redmine-Switch-User'] = $login;
-        }
-
-        return $this->client->request('POST', '/issues.json', $payload, $headers, $context);
     }
 
     /**
@@ -481,58 +502,69 @@ final class RedmineTicketService
         $resolved = $this->resolveUser($context);
         $login = $resolved['login'];
         $extraDescription = $resolved['extraDescription'];
+        $userId = $resolved['userId'] ?? null;
 
-        if ($extraDescription !== null) {
-            /** @var array<string, mixed> $helpdeskTicket */
-            $helpdeskTicket = $payload['helpdesk_ticket'] ?? [];
-            /** @var array<string, mixed> $issue */
-            $issue = $helpdeskTicket['issue'] ?? [];
-            $rawDescription = $issue['description'] ?? '';
-            $existing = is_string($rawDescription) ? $rawDescription : '';
-            $issue['description'] = $existing . "\n\n" . $extraDescription;
-            $helpdeskTicket['issue'] = $issue;
-            $payload['helpdesk_ticket'] = $helpdeskTicket;
-        }
-
-        $headers = [];
-        if ($login !== null) {
-            $headers['X-Redmine-Switch-User'] = $login;
-        }
-
-        // Best-effort start_date si viene issue en el payload raw
-        if (isset($payload['helpdesk_ticket']['issue']) && is_array($payload['helpdesk_ticket']['issue'])) {
-            if (!isset($payload['helpdesk_ticket']['issue']['start_date'])) {
-                $payload['helpdesk_ticket']['issue']['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
-            }
+        if ($userId !== null) {
+            $this->asociarUsuarioAGrupoPortal($userId, $context);
         }
 
         try {
-            return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
-        } catch (RedmineAuthException $e) {
-            $this->logger->warning('redmine.helpdesk.raw.auth_error', [
-                'correlation_id' => $context->correlationId,
-                'switch_user' => $login,
-                'code' => $e->getCode(),
-                'message' => $e->getMessage(),
-            ]);
-
-            if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
-                $this->ensureUserHasProjectMembership(
-                    projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
-                    login: $login,
-                    roleId: self::CRM_PROJECT_ROLE_ID,
-                    context: $context
-                );
-
-                $this->logger->info('redmine.helpdesk.raw.retry_after_membership', [
-                    'correlation_id' => $context->correlationId,
-                    'switch_user' => $login,
-                ]);
-
-                return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+            if ($extraDescription !== null) {
+                /** @var array<string, mixed> $helpdeskTicket */
+                $helpdeskTicket = $payload['helpdesk_ticket'] ?? [];
+                /** @var array<string, mixed> $issue */
+                $issue = $helpdeskTicket['issue'] ?? [];
+                $rawDescription = $issue['description'] ?? '';
+                $existing = is_string($rawDescription) ? $rawDescription : '';
+                $issue['description'] = $existing . "\n\n" . $extraDescription;
+                $helpdeskTicket['issue'] = $issue;
+                $payload['helpdesk_ticket'] = $helpdeskTicket;
             }
 
-            throw $e;
+            $headers = [];
+            if ($login !== null) {
+                $headers['X-Redmine-Switch-User'] = $login;
+            }
+
+            // Best-effort start_date si viene issue en el payload raw
+            if (isset($payload['helpdesk_ticket']['issue']) && is_array($payload['helpdesk_ticket']['issue'])) {
+                if (!isset($payload['helpdesk_ticket']['issue']['start_date'])) {
+                    $payload['helpdesk_ticket']['issue']['start_date'] = (new \DateTimeImmutable('now'))->format('Y-m-d');
+                }
+            }
+
+            try {
+                return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+            } catch (RedmineAuthException $e) {
+                $this->logger->warning('redmine.helpdesk.raw.auth_error', [
+                    'correlation_id' => $context->correlationId,
+                    'switch_user' => $login,
+                    'code' => $e->getCode(),
+                    'message' => $e->getMessage(),
+                ]);
+
+                if ($login !== null && $this->shouldAutoGrantCrmMembership($login, $context)) {
+                    $this->ensureUserHasProjectMembership(
+                        projectIdentifier: self::CRM_PROJECT_IDENTIFIER,
+                        login: $login,
+                        roleId: self::CRM_PROJECT_ROLE_ID,
+                        context: $context
+                    );
+
+                    $this->logger->info('redmine.helpdesk.raw.retry_after_membership', [
+                        'correlation_id' => $context->correlationId,
+                        'switch_user' => $login,
+                    ]);
+
+                    return $this->client->request('POST', '/helpdesk_tickets.json', $payload, $headers, $context);
+                }
+
+                throw $e;
+            }
+        } finally {
+            if ($userId !== null) {
+                $this->desasociarUsuarioDeGrupoPortal($userId, $context);
+            }
         }
     }
 
@@ -1008,6 +1040,68 @@ final class RedmineTicketService
             'project' => $projectIdentifier,
             'role_id' => $roleId,
         ]);
+    }
+
+    /**
+     * Asociación de usuario a grupo en Redmine.
+     * Operación administrativa: se ejecuta sin switch-user.
+     *
+     * @return array<string, mixed>
+     */
+    public function asociarUsuarioAGrupo(int $userId, int $group, RequestContext $context): array
+    {
+        $adminContext = new RequestContext($context->correlationId);
+
+        $payload = ['user_id' => $userId];
+
+        return $this->client->request('POST', sprintf('/groups/%d/users.json', $group), $payload, [], $adminContext);
+    }
+
+    /**
+     * Desasociación de usuario de un grupo en Redmine.
+     * Operación administrativa: se ejecuta sin switch-user.
+     *
+     * @return array<string, mixed>
+     */
+    public function desasociarUsuarioDeGrupo(int $userId, int $group, RequestContext $context): array
+    {
+        $adminContext = new RequestContext($context->correlationId);
+
+        return $this->client->request('DELETE', sprintf('/groups/%d/users/%d.json', $group, $userId), null, [], $adminContext);
+    }
+
+    /**
+     * Asocia al usuario al grupo portal configurado. Best-effort.
+     */
+    private function asociarUsuarioAGrupoPortal(int $userId, RequestContext $context): void
+    {
+        try {
+            $this->asociarUsuarioAGrupo($userId, $this->config->portalGroupId, $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.portal_group.asociar.error', [
+                'correlation_id' => $context->correlationId,
+                'user_id' => $userId,
+                'group_id' => $this->config->portalGroupId,
+                'error' => $e->getMessage(),
+            ]);
+        }
+    }
+
+    /**
+     * Desasocia al usuario del grupo portal configurado. Best-effort.
+     */
+    private function desasociarUsuarioDeGrupoPortal(int $userId, RequestContext $context): void
+    {
+        try {
+            $this->desasociarUsuarioDeGrupo($userId, $this->config->portalGroupId, $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.portal_group.desasociar.error', [
+                'correlation_id' => $context->correlationId,
+                'user_id' => $userId,
+                'group_id' => $this->config->portalGroupId,
+                'error' => $e->getMessage(),
+            ]);
+        }
     }
 
     /**

@@ -50,8 +50,8 @@ final class RedmineHttpClient
             $response = $this->client->sendRequest($request);
             return $this->handleResponse($response, $context);
         } catch (RedmineAuthException $e) {
-            // 2) fallback: si es 412 y veníamos con switch-user, reintento sin switch-user
-            if ((int) $e->getCode() === 412 && $this->hasSwitchUser($headers, $context)) {
+            // 2) fallback: si es 403/412 y veníamos con switch-user, reintento sin switch-user
+            if (in_array((int) $e->getCode(), [403, 412], true) && $this->hasSwitchUser($headers, $context)) {
                 $this->logger->warning('redmine.switch_user.retry_without_switch_user', [
                     'method' => $method,
                     'url' => $url,
@@ -107,8 +107,8 @@ final class RedmineHttpClient
             $response = $this->client->sendRequest($request);
             return $this->handleRawResponse($response, $context);
         } catch (RedmineAuthException $e) {
-            // 2) fallback 412
-            if ((int) $e->getCode() === 412 && $this->hasSwitchUser($headers, $context)) {
+            // 2) fallback 403/412
+            if (in_array((int) $e->getCode(), [403, 412], true) && $this->hasSwitchUser($headers, $context)) {
                 $this->logger->warning('redmine.switch_user.retry_without_switch_user', [
                     'method' => $method,
                     'url' => $url,

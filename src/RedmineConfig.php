@@ -20,6 +20,8 @@ final class RedmineConfig
         /** @var string[] Dominios internos adicionales que permiten crear usuarios en Redmine */
         public array $internalEmailDomains = ['famiq.com.uy'],
         public int $portalGroupId = 100,
+        public ?string $apiKey = null,
+
     ) {
     }
 }

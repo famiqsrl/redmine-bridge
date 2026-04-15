@@ -337,6 +337,15 @@ final class RedmineTicketService
 
     public function crearMensaje(MensajeDTO $mensaje, RequestContext $context): CrearMensajeResult
     {
+        $requestedLogin = trim((string) ($context->switchUser ?? $context->idUsuario ?? ''));
+        $resolved = $this->resolveUser($context);
+        $login = $requestedLogin !== '' ? $requestedLogin : $resolved['login'];
+        $userId = $resolved['userId'] ?? null;
+
+        if ($userId === null && $login !== null && trim($login) !== '') {
+            $userId = $this->resolveUserIdByLogin($login, new RequestContext($context->correlationId));
+        }
+
         $payload = $this->mapper->messagePayload($mensaje);
 
         if ($mensaje->adjuntos !== []) {
@@ -344,7 +353,38 @@ final class RedmineTicketService
             $payload['issue']['uploads'] = $uploads;
         }
 
-        $this->client->request('PUT', sprintf('/issues/%d.json', $mensaje->issueId), $payload, [], $context);
+        $headers = [];
+        if ($login !== null) {
+            $headers['X-Redmine-Switch-User'] = $login;
+        }
+
+        if ($userId !== null) {
+            $this->asociarUsuarioAGrupoPortal($userId, $context);
+            usleep(250000);
+        }
+
+        try {
+            try {
+                $this->client->request('PUT', sprintf('/issues/%d.json', $mensaje->issueId), $payload, $headers, $context);
+            } catch (RedmineAuthException $e) {
+                if ($userId === null) {
+                    throw $e;
+                }
+
+                $this->asociarUsuarioAGrupoPortal($userId, $context);
+                usleep(350000);
+
+                $this->client->request('PUT', sprintf('/issues/%d.json', $mensaje->issueId), $payload, $headers, $context);
+            }
+
+            if ($userId !== null) {
+                $this->asegurarUsuarioComoWatcher($mensaje->issueId, $userId, $context);
+            }
+        } finally {
+            if ($userId !== null) {
+                $this->desasociarUsuarioDeGrupoPortal($userId, $context);
+            }
+        }
 
         return new CrearMensajeResult(null);
     }
@@ -1104,6 +1144,41 @@ final class RedmineTicketService
         }
     }
 
+    private function asegurarUsuarioComoWatcher(int $issueId, int $userId, RequestContext $context): void
+    {
+        try {
+            $this->client->request(
+                'POST',
+                sprintf('/issues/%d/watchers.json', $issueId),
+                ['user_id' => $userId],
+                [],
+                new RequestContext($context->correlationId)
+            );
+
+            $this->logger->info('redmine.issue.watcher.added', [
+                'correlation_id' => $context->correlationId,
+                'issue_id' => $issueId,
+                'user_id' => $userId,
+            ]);
+        } catch (RedmineValidationException $e) {
+            $this->logger->info('redmine.issue.watcher.exists', [
+                'correlation_id' => $context->correlationId,
+                'issue_id' => $issueId,
+                'user_id' => $userId,
+                'code' => $e->getCode(),
+                'errors' => $e->errors,
+            ]);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.issue.watcher.error', [
+                'correlation_id' => $context->correlationId,
+                'issue_id' => $issueId,
+                'user_id' => $userId,
+                'error' => $e->getMessage(),
+                'code' => $e->getCode(),
+            ]);
+        }
+    }
+
     /**
      * Asegura que el usuario (por ID numerico) sea miembro del proyecto (por ID numerico).
      * Usa el role CRM_PROJECT_ROLE_ID por defecto. Best-effort: no lanza excepciones.
@@ -1263,14 +1338,4 @@ final class RedmineTicketService
 
         return new CrearTicketResult($issueId);
     }
-
-    /**
-     * @return array<string, mixed>
-     */
-    public function obtenerHelpdeskTicket(int $ticketId, RequestContext $context): array
-    {
-        $path = sprintf('/helpdesk_tickets/%d.json', $ticketId);
-        return $this->client->request('GET', $path, null, [], $context);
-    }
 }
-

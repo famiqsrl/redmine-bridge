@@ -23,17 +23,21 @@ final class ContactDTO
      */
     public function toPayloadArray(): array
     {
-        $firstName = $this->firstName;
-        if ($firstName === null || trim($firstName) === '') {
-            $firstName = str_contains($this->email, '@')
-                ? explode('@', $this->email)[0]
-                : 'Contacto';
-        }
+        $trimmedEmail = trim($this->email);
+        $block = [];
 
-        $block = [
-            'email' => mb_strtolower(trim($this->email)),
-            'first_name' => $firstName,
-        ];
+        if ($trimmedEmail !== '') {
+            $firstName = $this->firstName;
+            if ($firstName === null || trim($firstName) === '') {
+                $firstName = str_contains($trimmedEmail, '@')
+                    ? explode('@', $trimmedEmail)[0]
+                    : 'Contacto';
+            }
+            $block['email'] = mb_strtolower($trimmedEmail);
+            $block['first_name'] = $firstName;
+        } elseif ($this->firstName !== null && trim($this->firstName) !== '') {
+            $block['first_name'] = trim($this->firstName);
+        }
 
         if ($this->lastName !== null && trim($this->lastName) !== '') {
             $block['last_name'] = trim($this->lastName);

@@ -25,6 +25,8 @@ final class RedmineBridge
 {
     private RedmineTicketService $ticketService;
     private RedmineClienteService $clienteService;
+    private RedmineConfig $config;
+    private LoggerInterface $logger;
 
     public function __construct(
         RedmineConfig $config,
@@ -34,6 +36,9 @@ final class RedmineBridge
         ?string $contactUpsertPath = '/contacts.json',
     ) {
         $logger = $logger ?? new NullLogger();
+
+        $this->config = $config;
+        $this->logger = $logger;
 
         $http = new RedmineHttpClient($client, $config, $logger);
         $mapper = new RedminePayloadMapper();
@@ -69,6 +74,16 @@ final class RedmineBridge
         $resolvedContext = $this->resolveContext($context);
         $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
 
+        // Si el contacto es un empleado Famiq (dominio interno), reemplazamos
+        // por el contacto de tipo "company" de la empresa del incidente ($cliente).
+        if ($this->config->isInternalEmail($contactEmail) && is_array($cliente)) {
+            $replacement = $this->resolveCompanyContactFromCliente($cliente, $contactEmail, $resolvedContext);
+            if ($replacement !== null) {
+                $contact = $replacement;
+                $contactEmail = $replacement->email;
+            }
+        }
+
         if ($contactEmail !== '') {
             $searchResult = $this->clienteService->buscarCliente($contactEmail, null, $resolvedContext);
             if ($searchResult->items === [] && is_array($cliente)) {
@@ -99,6 +114,29 @@ final class RedmineBridge
     ): CrearTicketResult {
         $resolvedContext = $this->resolveContext($context);
         $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
+
+        // Si el contacto es un empleado Famiq (dominio interno), reemplazamos
+        // por el contacto de tipo "company" de la empresa del incidente ($cliente).
+        if ($this->config->isInternalEmail($contactEmail) && is_array($cliente)) {
+            try {
+                $replacement = $this->resolveCompanyContactFromCliente($cliente, $contactEmail, $resolvedContext);
+                if ($replacement !== null) {
+                    $contact = $replacement;
+                    $contactEmail = $replacement->email;
+                    if ($replacement->id !== null && $replacement->id > 0) {
+                        $contactId = $replacement->id;
+                    }
+                }
+            } catch (\Throwable $e) {
+                // Best-effort: si falla la resolución del contacto company,
+                // seguimos con el contacto original.
+                $this->logger->warning('redmine.helpdesk.company_contact.resolve_failed', [
+                    'correlation_id' => $resolvedContext->correlationId,
+                    'error' => get_class($e),
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
 
         if ($contactEmail !== '') {
             try {
@@ -304,6 +342,77 @@ final class RedmineBridge
     private function resolveContext(?RequestContext $context): RequestContext
     {
         return $context ?? RequestContext::generate();
+    }
+
+    /**
+     * Resuelve el contacto de tipo "company" para la empresa del cliente/incidente.
+     * Busca (o crea, via upsert) el contacto con is_company=true usando los
+     * datos del array $cliente (razonSocial, cuit, externalId, etc.) y retorna
+     * un ContactDTO que referencia a ese contacto por id.
+     *
+     * @param array<string, mixed> $cliente
+     */
+    private function resolveCompanyContactFromCliente(
+        array $cliente,
+        string $originalEmail,
+        RequestContext $context,
+    ): ?ContactDTO {
+        $base = $this->buildClienteFromArray($cliente, '');
+
+        // Sin razón social no podemos identificar/crear un contacto company.
+        if ($base->razonSocial === null || $base->razonSocial === '') {
+            $this->logger->info('redmine.helpdesk.company_contact.skip_no_razon_social', [
+                'correlation_id' => $context->correlationId,
+                'original_email' => $originalEmail,
+            ]);
+            return null;
+        }
+
+        $empresaDTO = new ClienteDTO(
+            'empresa',
+            $base->razonSocial,
+            null,
+            null,
+            $base->cuit,
+            $base->emails,
+            $base->telefonos,
+            $base->direccion,
+            $base->externalId,
+            $base->sourceSystem,
+        );
+
+        $result = $this->clienteService->upsertCliente($empresaDTO, $context);
+
+        $id = $result->contactId !== null && $result->contactId !== ''
+            ? (int) $result->contactId
+            : 0;
+
+        if ($id <= 0) {
+            $this->logger->warning('redmine.helpdesk.company_contact.no_id_returned', [
+                'correlation_id' => $context->correlationId,
+                'razon_social' => $empresaDTO->razonSocial,
+                'external_id' => $empresaDTO->externalId,
+            ]);
+            return null;
+        }
+
+        $this->logger->info('redmine.helpdesk.company_contact.resolved', [
+            'correlation_id' => $context->correlationId,
+            'original_email' => $originalEmail,
+            'razon_social' => $empresaDTO->razonSocial,
+            'contact_id' => $id,
+        ]);
+
+        // Preferimos el email de la empresa (si lo tiene); si no, dejamos el
+        // email vacío para que el contacto se identifique sólo por id.
+        $primaryEmail = $empresaDTO->emails[0] ?? '';
+
+        return new ContactDTO(
+            email: $primaryEmail,
+            firstName: $empresaDTO->razonSocial,
+            lastName: null,
+            id: $id,
+        );
     }
 
     /**

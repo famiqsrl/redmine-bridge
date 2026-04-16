@@ -16,6 +16,7 @@ use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\ObtenerTicketResult;
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\DTO\UpsertClienteResult;
+use Famiq\RedmineBridge\Contacts\DatabaseContactResolver;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Http\Client\ClientInterface;
 use Psr\Log\LoggerInterface;
@@ -27,6 +28,7 @@ final class RedmineBridge
     private RedmineClienteService $clienteService;
     private RedmineConfig $config;
     private LoggerInterface $logger;
+    private DatabaseContactResolver $dbContactResolver;
 
     public function __construct(
         RedmineConfig $config,
@@ -51,6 +53,7 @@ final class RedmineBridge
         );
         $this->config = $config;
         $this->logger = $logger;
+        $this->dbContactResolver = new DatabaseContactResolver($logger);
     }
 
     public function crearTicket(
@@ -363,9 +366,9 @@ final class RedmineBridge
 
     /**
      * Busca en Redmine el contacto que corresponde a la empresa cliente,
-     * usando los identificadores disponibles (externalId, cuit, razonSocial,
-     * clienteRef del ticket). Retorna null si no se encuentra ningun contacto
-     * con email asociado.
+     * usando los identificadores disponibles (sap_number / externalId,
+     * cuit, razonSocial, clienteRef del ticket). Retorna null si no se
+     * encuentra ningun contacto con email asociado.
      *
      * @param array<string, mixed>|null $cliente
      */
@@ -374,13 +377,15 @@ final class RedmineBridge
         TicketDTO $ticket,
         RequestContext $context,
     ): ?ContactDTO {
-        $externalIds = [];
+        $sapNumbers = [];
         $textQueries = [];
 
         if (is_array($cliente)) {
-            $extId = $this->normalizeString($cliente['externalId'] ?? null);
-            if ($extId !== null) {
-                $externalIds[] = $extId;
+            foreach (['sapNumber', 'sap_number', 'externalId'] as $key) {
+                $value = $this->normalizeString($cliente[$key] ?? null);
+                if ($value !== null) {
+                    $sapNumbers[] = $value;
+                }
             }
 
             foreach (['cuit', 'razonSocial', 'nombre'] as $key) {
@@ -393,43 +398,37 @@ final class RedmineBridge
 
         $clienteRef = $this->normalizeString($ticket->clienteRef);
         if ($clienteRef !== null) {
-            $externalIds[] = $clienteRef;
+            $sapNumbers[] = $clienteRef;
             $textQueries[] = $clienteRef;
         }
 
-        $externalIds = array_values(array_unique($externalIds));
+        $sapNumbers = array_values(array_unique($sapNumbers));
         $textQueries = array_values(array_unique($textQueries));
 
-        // 1) Intento directo por ID de contacto (cuando el identificador es numerico,
-        //    p.ej. "1763" puede ser el contact_id en Redmine).
-        foreach ($externalIds as $candidate) {
-            if (!ctype_digit($candidate)) {
-                continue;
-            }
-
-            $contact = $this->obtenerContactoEmpresaPorId((int) $candidate, $context);
+        // 1) Busqueda directa en la base de datos de Redmine por sap_number.
+        //    Es lo mas confiable porque el REST de RedmineUP no indexa sap_number.
+        foreach ($sapNumbers as $sap) {
+            $contact = $this->dbContactResolver->buscarContactoEmpresaPorSapNumber($sap);
             if ($contact !== null) {
                 return $contact;
             }
         }
 
-        // 2) Filtro directo por external_id (soportado por RedmineUP CRM).
-        foreach ($externalIds as $extId) {
-            $contact = $this->buscarContactoEmpresaPorExternalId($extId, $context);
+        // 2) Fallbacks via HTTP: external_id filter + search por texto.
+        foreach ($sapNumbers as $sap) {
+            $contact = $this->buscarContactoEmpresaPorExternalId($sap, $context);
             if ($contact !== null) {
                 return $contact;
             }
         }
 
-        // 3) Busqueda de texto matcheando external_id en los resultados.
-        foreach ($externalIds as $extId) {
-            $contact = $this->buscarContactoEmpresaPorQuery($extId, $extId, $context);
+        foreach ($sapNumbers as $sap) {
+            $contact = $this->buscarContactoEmpresaPorQuery($sap, $sap, $context);
             if ($contact !== null) {
                 return $contact;
             }
         }
 
-        // 4) Busqueda de texto por cuit / razonSocial / nombre.
         foreach ($textQueries as $query) {
             $contact = $this->buscarContactoEmpresaPorQuery($query, null, $context);
             if ($contact !== null) {
@@ -438,19 +437,6 @@ final class RedmineBridge
         }
 
         return null;
-    }
-
-    /**
-     * Obtiene el contacto por contact_id y lo convierte a ContactDTO si tiene email utilizable.
-     */
-    private function obtenerContactoEmpresaPorId(int $contactId, RequestContext $context): ?ContactDTO
-    {
-        $raw = $this->clienteService->obtenerContacto($contactId, $context);
-        if (!is_array($raw)) {
-            return null;
-        }
-
-        return $this->buildContactDTOFromRaw($raw);
     }
 
     /**

@@ -75,6 +75,27 @@ final class RedmineClienteService
     }
 
     /**
+     * Lista contactos aceptando filtros arbitrarios soportados por Redmine/RedmineUP CRM
+     * (por ej. external_id, sap_number, name, search, is_company, limit, offset, ids, etc.).
+     * Si se pasa $projectIdentifier, scope de la busqueda al proyecto correspondiente.
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     */
+    public function listarContactos(array $params, RequestContext $context, ?string $projectIdentifier = null): array
+    {
+        $path = $projectIdentifier !== null && $projectIdentifier !== ''
+            ? sprintf('/projects/%s/contacts.json', rawurlencode($projectIdentifier))
+            : '/contacts.json';
+
+        if ($params !== []) {
+            $path .= '?' . http_build_query($params);
+        }
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
      * @param array<string, mixed> $contactPayload
      * @return array<string, mixed>
      */

@@ -24,4 +24,31 @@ final class RedmineConfig
 
     ) {
     }
+
+    /**
+     * Determina si un email pertenece a un dominio interno de Famiq.
+     */
+    public function isInternalEmail(?string $email): bool
+    {
+        if ($email === null) {
+            return false;
+        }
+
+        $email = trim($email);
+        if ($email === '' || !str_contains($email, '@')) {
+            return false;
+        }
+
+        $domain = strtolower(substr(strrchr($email, '@') ?: '', 1));
+        if ($domain === '') {
+            return false;
+        }
+
+        $allDomains = array_map('strtolower', array_merge(
+            [$this->internalEmailDomain],
+            $this->internalEmailDomains,
+        ));
+
+        return in_array($domain, $allDomains, true);
+    }
 }

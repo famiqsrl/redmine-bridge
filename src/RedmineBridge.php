@@ -23,8 +23,12 @@ use Psr\Log\NullLogger;
 
 final class RedmineBridge
 {
+    private const CRM_PROJECT_IDENTIFIER = 'r-crm';
+
     private RedmineTicketService $ticketService;
     private RedmineClienteService $clienteService;
+    private RedmineConfig $config;
+    private LoggerInterface $logger;
 
     public function __construct(
         RedmineConfig $config,
@@ -47,6 +51,8 @@ final class RedmineBridge
             $contactUpsertPath,
             $logger,
         );
+        $this->config = $config;
+        $this->logger = $logger;
     }
 
     public function crearTicket(
@@ -67,6 +73,8 @@ final class RedmineBridge
         ?array $cliente = null,
     ): CrearTicketResult {
         $resolvedContext = $this->resolveContext($context);
+
+        $contact = $this->resolveContactForFamiqEmail($contact, $cliente, $ticket, $resolvedContext);
         $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
 
         if ($contactEmail !== '') {
@@ -98,6 +106,11 @@ final class RedmineBridge
         ?array $cliente = null,
     ): CrearTicketResult {
         $resolvedContext = $this->resolveContext($context);
+
+        $contact = $this->resolveContactForFamiqEmail($contact, $cliente, $ticket, $resolvedContext);
+        if ($contact instanceof ContactDTO && $contact->id !== null && $contact->id > 0) {
+            $contactId = $contact->id;
+        }
         $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
 
         if ($contactEmail !== '') {
@@ -304,6 +317,276 @@ final class RedmineBridge
     private function resolveContext(?RequestContext $context): RequestContext
     {
         return $context ?? RequestContext::generate();
+    }
+
+    /**
+     * Cuando el email del contacto pertenece a un dominio interno de Famiq
+     * (@famiq.com.ar / @famiq.com.uy), no queremos asociar el ticket al
+     * usuario interno sino al contacto correspondiente a la empresa cliente
+     * en Redmine. Si encontramos un contacto en Redmine que matchea con la
+     * empresa (por externalId / cuit / razonSocial / clienteRef), devolvemos
+     * un ContactDTO con esos datos. Caso contrario devolvemos el contacto
+     * original sin modificar.
+     *
+     * @param array<string, mixed>|null $cliente
+     */
+    private function resolveContactForFamiqEmail(
+        string|ContactDTO $contact,
+        ?array $cliente,
+        TicketDTO $ticket,
+        RequestContext $context,
+    ): string|ContactDTO {
+        $contactEmail = $contact instanceof ContactDTO ? $contact->email : $contact;
+
+        if ($contactEmail === '' || !$this->config->isInternalEmail($contactEmail)) {
+            return $contact;
+        }
+
+        $companyContact = $this->buscarContactoEmpresa($cliente, $ticket, $context);
+        if ($companyContact === null) {
+            $this->logger->info('redmine.bridge.famiq_email.no_company_contact', [
+                'correlation_id' => $context->correlationId,
+                'famiq_email' => $contactEmail,
+                'cliente_ref' => $ticket->clienteRef,
+                'cliente_external_id' => is_array($cliente) ? ($cliente['externalId'] ?? null) : null,
+            ]);
+            return $contact;
+        }
+
+        $this->logger->info('redmine.bridge.famiq_email.contact_replaced', [
+            'correlation_id' => $context->correlationId,
+            'famiq_email' => $contactEmail,
+            'company_contact_id' => $companyContact->id,
+            'company_contact_email' => $companyContact->email,
+        ]);
+
+        return $companyContact;
+    }
+
+    /**
+     * Busca en Redmine el contacto que corresponde a la empresa cliente,
+     * usando los identificadores disponibles (sap_number, cuit, razonSocial,
+     * clienteRef del ticket). Retorna null si no se encuentra ningun contacto
+     * con email asociado.
+     *
+     * @param array<string, mixed>|null $cliente
+     */
+    private function buscarContactoEmpresa(
+        ?array $cliente,
+        TicketDTO $ticket,
+        RequestContext $context,
+    ): ?ContactDTO {
+        $sapNumbers = [];
+        $textQueries = [];
+
+        if (is_array($cliente)) {
+            foreach (['sapNumber', 'sap_number', 'externalId'] as $key) {
+                $value = $this->normalizeString($cliente[$key] ?? null);
+                if ($value !== null) {
+                    $sapNumbers[] = $value;
+                }
+            }
+
+            foreach (['cuit', 'razonSocial', 'nombre'] as $key) {
+                $value = $this->normalizeString($cliente[$key] ?? null);
+                if ($value !== null) {
+                    $textQueries[] = $value;
+                }
+            }
+        }
+
+        $clienteRef = $this->normalizeString($ticket->clienteRef);
+        if ($clienteRef !== null) {
+            $sapNumbers[] = $clienteRef;
+            $textQueries[] = $clienteRef;
+        }
+
+        $sapNumbers = array_values(array_unique($sapNumbers));
+        $textQueries = array_values(array_unique($textQueries));
+
+        // 1) Busqueda por sap_number contra /projects/r-crm/contacts.json.
+        //    Es el filtro dedicado que habilitaron para este caso.
+        foreach ($sapNumbers as $sap) {
+            $contact = $this->buscarContactoEmpresaPorSapNumber($sap, $context);
+            if ($contact !== null) {
+                return $contact;
+            }
+        }
+
+        // 2) Fallback: search por texto matcheando external_id en los resultados.
+        foreach ($sapNumbers as $sap) {
+            $contact = $this->buscarContactoEmpresaPorQuery($sap, $sap, $context);
+            if ($contact !== null) {
+                return $contact;
+            }
+        }
+
+        // 3) Fallback: search por texto por cuit / razonSocial / nombre.
+        foreach ($textQueries as $query) {
+            $contact = $this->buscarContactoEmpresaPorQuery($query, null, $context);
+            if ($contact !== null) {
+                return $contact;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Busca el contacto de la empresa usando el filtro `sap_number` contra
+     * /projects/r-crm/contacts.json. Retorna el primer contacto con email
+     * utilizable.
+     */
+    private function buscarContactoEmpresaPorSapNumber(string $sapNumber, RequestContext $context): ?ContactDTO
+    {
+        try {
+            $response = $this->clienteService->listarContactos(
+                ['sap_number' => $sapNumber, 'limit' => 25],
+                $context,
+                self::CRM_PROJECT_IDENTIFIER,
+            );
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.bridge.famiq_email.sap_number_lookup_failed', [
+                'correlation_id' => $context->correlationId,
+                'sap_number' => $sapNumber,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $contacts = $response['contacts'] ?? null;
+        if (!is_array($contacts) || $contacts === []) {
+            return null;
+        }
+
+        foreach ($contacts as $raw) {
+            if (!is_array($raw)) {
+                continue;
+            }
+
+            $dto = $this->buildContactDTOFromRaw($raw);
+            if ($dto !== null) {
+                return $dto;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Ejecuta una busqueda contra /contacts.json y devuelve el primer contacto
+     * que tenga email. Si se pasa $matchExternalId solo se considera el
+     * contacto cuyo external_id coincida exactamente.
+     */
+    private function buscarContactoEmpresaPorQuery(
+        string $query,
+        ?string $matchExternalId,
+        RequestContext $context,
+    ): ?ContactDTO {
+        try {
+            $response = $this->clienteService->buscarContactos($query, 25, 0, $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.bridge.famiq_email.contact_search_failed', [
+                'correlation_id' => $context->correlationId,
+                'query' => $query,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $contacts = $response['contacts'] ?? null;
+        if (!is_array($contacts) || $contacts === []) {
+            return null;
+        }
+
+        foreach ($contacts as $raw) {
+            if (!is_array($raw)) {
+                continue;
+            }
+
+            if ($matchExternalId !== null) {
+                $extId = isset($raw['external_id']) ? (string) $raw['external_id'] : '';
+                if ($extId !== $matchExternalId) {
+                    continue;
+                }
+            }
+
+            $dto = $this->buildContactDTOFromRaw($raw);
+            if ($dto !== null) {
+                return $dto;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Convierte la representacion cruda de un contacto (como la devuelve
+     * RedmineUP CRM) en un ContactDTO. Devuelve null si no encontramos un email
+     * utilizable (todos vacios o internos de famiq).
+     *
+     * @param array<string, mixed> $raw
+     */
+    private function buildContactDTOFromRaw(array $raw): ?ContactDTO
+    {
+        $email = $this->extractContactEmail($raw);
+        if ($email === null) {
+            return null;
+        }
+
+        $idRaw = $raw['id'] ?? null;
+        $id = is_numeric($idRaw) ? (int) $idRaw : 0;
+
+        $firstNameRaw = $raw['first_name'] ?? null;
+        $firstName = is_scalar($firstNameRaw) ? (string) $firstNameRaw : null;
+
+        $lastNameRaw = $raw['last_name'] ?? null;
+        $lastName = is_scalar($lastNameRaw) ? (string) $lastNameRaw : null;
+
+        // Para contactos tipo empresa, RedmineUP suele dejar first/last vacios
+        // y usa el campo "company".
+        if ($firstName === null || trim($firstName) === '') {
+            $company = $raw['company'] ?? null;
+            if (is_scalar($company)) {
+                $firstName = (string) $company;
+            }
+        }
+
+        return new ContactDTO(
+            email: $email,
+            firstName: $firstName,
+            lastName: $lastName,
+            id: $id > 0 ? $id : null,
+        );
+    }
+
+    /**
+     * @param array<string, mixed> $raw
+     */
+    private function extractContactEmail(array $raw): ?string
+    {
+        $emails = $raw['emails'] ?? null;
+        if (is_array($emails)) {
+            foreach ($emails as $email) {
+                if (!is_string($email)) {
+                    continue;
+                }
+                $trimmed = trim($email);
+                if ($trimmed === '' || $this->config->isInternalEmail($trimmed)) {
+                    continue;
+                }
+                return $trimmed;
+            }
+        }
+
+        if (isset($raw['email']) && is_string($raw['email'])) {
+            $trimmed = trim($raw['email']);
+            if ($trimmed !== '' && !$this->config->isInternalEmail($trimmed)) {
+                return $trimmed;
+            }
+        }
+
+        return null;
     }
 
     /**

@@ -400,6 +400,28 @@ final class RedmineBridge
         $externalIds = array_values(array_unique($externalIds));
         $textQueries = array_values(array_unique($textQueries));
 
+        // 1) Intento directo por ID de contacto (cuando el identificador es numerico,
+        //    p.ej. "1763" puede ser el contact_id en Redmine).
+        foreach ($externalIds as $candidate) {
+            if (!ctype_digit($candidate)) {
+                continue;
+            }
+
+            $contact = $this->obtenerContactoEmpresaPorId((int) $candidate, $context);
+            if ($contact !== null) {
+                return $contact;
+            }
+        }
+
+        // 2) Filtro directo por external_id (soportado por RedmineUP CRM).
+        foreach ($externalIds as $extId) {
+            $contact = $this->buscarContactoEmpresaPorExternalId($extId, $context);
+            if ($contact !== null) {
+                return $contact;
+            }
+        }
+
+        // 3) Busqueda de texto matcheando external_id en los resultados.
         foreach ($externalIds as $extId) {
             $contact = $this->buscarContactoEmpresaPorQuery($extId, $extId, $context);
             if ($contact !== null) {
@@ -407,11 +429,76 @@ final class RedmineBridge
             }
         }
 
+        // 4) Busqueda de texto por cuit / razonSocial / nombre.
         foreach ($textQueries as $query) {
             $contact = $this->buscarContactoEmpresaPorQuery($query, null, $context);
             if ($contact !== null) {
                 return $contact;
             }
+        }
+
+        return null;
+    }
+
+    /**
+     * Obtiene el contacto por contact_id y lo convierte a ContactDTO si tiene email utilizable.
+     */
+    private function obtenerContactoEmpresaPorId(int $contactId, RequestContext $context): ?ContactDTO
+    {
+        $raw = $this->clienteService->obtenerContacto($contactId, $context);
+        if (!is_array($raw)) {
+            return null;
+        }
+
+        return $this->buildContactDTOFromRaw($raw);
+    }
+
+    /**
+     * Usa el filtro ?external_id=X de RedmineUP CRM para localizar el contacto
+     * de la empresa en forma directa. Filtra ademas los resultados matcheando
+     * el external_id exacto.
+     */
+    private function buscarContactoEmpresaPorExternalId(string $externalId, RequestContext $context): ?ContactDTO
+    {
+        try {
+            $response = $this->clienteService->listarContactos([
+                'external_id' => $externalId,
+                'limit' => 25,
+            ], $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.bridge.famiq_email.contact_external_id_lookup_failed', [
+                'correlation_id' => $context->correlationId,
+                'external_id' => $externalId,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $contacts = $response['contacts'] ?? null;
+        if (!is_array($contacts) || $contacts === []) {
+            return null;
+        }
+
+        foreach ($contacts as $raw) {
+            if (!is_array($raw)) {
+                continue;
+            }
+
+            $extId = isset($raw['external_id']) ? (string) $raw['external_id'] : '';
+            if ($extId !== $externalId) {
+                continue;
+            }
+
+            $dto = $this->buildContactDTOFromRaw($raw);
+            if ($dto !== null) {
+                return $dto;
+            }
+        }
+
+        // Fallback: si el API ya nos filtro por external_id y solo hay un resultado,
+        // tomamos ese aunque el campo external_id no venga en el payload.
+        if (count($contacts) === 1 && is_array($contacts[0])) {
+            return $this->buildContactDTOFromRaw($contacts[0]);
         }
 
         return null;
@@ -455,30 +542,53 @@ final class RedmineBridge
                 }
             }
 
-            $email = $this->extractContactEmail($raw);
-            if ($email === null) {
-                continue;
+            $dto = $this->buildContactDTOFromRaw($raw);
+            if ($dto !== null) {
+                return $dto;
             }
-
-            $id = isset($raw['id']) ? (int) $raw['id'] : 0;
-            $firstName = isset($raw['first_name']) ? (string) $raw['first_name'] : null;
-            $lastName = isset($raw['last_name']) ? (string) $raw['last_name'] : null;
-
-            // Para contactos tipo empresa, RedmineUP suele dejar first/last vacios
-            // y usa el campo "company".
-            if (($firstName === null || trim($firstName) === '') && isset($raw['company'])) {
-                $firstName = (string) $raw['company'];
-            }
-
-            return new ContactDTO(
-                email: $email,
-                firstName: $firstName,
-                lastName: $lastName,
-                id: $id > 0 ? $id : null,
-            );
         }
 
         return null;
+    }
+
+    /**
+     * Convierte la representacion cruda de un contacto (como la devuelve
+     * RedmineUP CRM) en un ContactDTO. Devuelve null si no encontramos un email
+     * utilizable (todos vacios o internos de famiq).
+     *
+     * @param array<string, mixed> $raw
+     */
+    private function buildContactDTOFromRaw(array $raw): ?ContactDTO
+    {
+        $email = $this->extractContactEmail($raw);
+        if ($email === null) {
+            return null;
+        }
+
+        $idRaw = $raw['id'] ?? null;
+        $id = is_numeric($idRaw) ? (int) $idRaw : 0;
+
+        $firstNameRaw = $raw['first_name'] ?? null;
+        $firstName = is_scalar($firstNameRaw) ? (string) $firstNameRaw : null;
+
+        $lastNameRaw = $raw['last_name'] ?? null;
+        $lastName = is_scalar($lastNameRaw) ? (string) $lastNameRaw : null;
+
+        // Para contactos tipo empresa, RedmineUP suele dejar first/last vacios
+        // y usa el campo "company".
+        if ($firstName === null || trim($firstName) === '') {
+            $company = $raw['company'] ?? null;
+            if (is_scalar($company)) {
+                $firstName = (string) $company;
+            }
+        }
+
+        return new ContactDTO(
+            email: $email,
+            firstName: $firstName,
+            lastName: $lastName,
+            id: $id > 0 ? $id : null,
+        );
     }
 
     /**

@@ -75,6 +75,49 @@ final class RedmineClienteService
     }
 
     /**
+     * Lista contactos aceptando filtros arbitrarios soportados por Redmine/RedmineUP CRM
+     * (por ej. external_id, name, search, is_company, limit, offset, ids, etc.).
+     *
+     * @param array<string, mixed> $params
+     * @return array<string, mixed>
+     */
+    public function listarContactos(array $params, RequestContext $context): array
+    {
+        $path = '/contacts.json';
+        if ($params !== []) {
+            $path .= '?' . http_build_query($params);
+        }
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
+     * Obtiene un contacto por su ID. Devuelve null si no existe o si falla la consulta.
+     *
+     * @return array<string, mixed>|null
+     */
+    public function obtenerContacto(int $contactId, RequestContext $context): ?array
+    {
+        if ($contactId <= 0) {
+            return null;
+        }
+
+        try {
+            $response = $this->client->request('GET', sprintf('/contacts/%d.json', $contactId), null, [], $context);
+        } catch (\Throwable $e) {
+            $this->logger->warning('redmine.contact.obtener.error', [
+                'contact_id' => $contactId,
+                'correlation_id' => $context->correlationId,
+                'error' => $e->getMessage(),
+            ]);
+            return null;
+        }
+
+        $contact = $response['contact'] ?? null;
+        return is_array($contact) ? $contact : null;
+    }
+
+    /**
      * @param array<string, mixed> $contactPayload
      * @return array<string, mixed>
      */

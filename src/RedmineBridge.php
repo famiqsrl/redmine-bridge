@@ -16,7 +16,6 @@ use Famiq\RedmineBridge\DTO\MensajeDTO;
 use Famiq\RedmineBridge\DTO\ObtenerTicketResult;
 use Famiq\RedmineBridge\DTO\TicketDTO;
 use Famiq\RedmineBridge\DTO\UpsertClienteResult;
-use Famiq\RedmineBridge\Contacts\DatabaseContactResolver;
 use Famiq\RedmineBridge\Http\RedmineHttpClient;
 use Psr\Http\Client\ClientInterface;
 use Psr\Log\LoggerInterface;
@@ -24,11 +23,12 @@ use Psr\Log\NullLogger;
 
 final class RedmineBridge
 {
+    private const CRM_PROJECT_IDENTIFIER = 'r-crm';
+
     private RedmineTicketService $ticketService;
     private RedmineClienteService $clienteService;
     private RedmineConfig $config;
     private LoggerInterface $logger;
-    private DatabaseContactResolver $dbContactResolver;
 
     public function __construct(
         RedmineConfig $config,
@@ -53,7 +53,6 @@ final class RedmineBridge
         );
         $this->config = $config;
         $this->logger = $logger;
-        $this->dbContactResolver = new DatabaseContactResolver($logger);
     }
 
     public function crearTicket(
@@ -366,9 +365,9 @@ final class RedmineBridge
 
     /**
      * Busca en Redmine el contacto que corresponde a la empresa cliente,
-     * usando los identificadores disponibles (sap_number / externalId,
-     * cuit, razonSocial, clienteRef del ticket). Retorna null si no se
-     * encuentra ningun contacto con email asociado.
+     * usando los identificadores disponibles (sap_number, cuit, razonSocial,
+     * clienteRef del ticket). Retorna null si no se encuentra ningun contacto
+     * con email asociado.
      *
      * @param array<string, mixed>|null $cliente
      */
@@ -405,23 +404,16 @@ final class RedmineBridge
         $sapNumbers = array_values(array_unique($sapNumbers));
         $textQueries = array_values(array_unique($textQueries));
 
-        // 1) Busqueda directa en la base de datos de Redmine por sap_number.
-        //    Es lo mas confiable porque el REST de RedmineUP no indexa sap_number.
+        // 1) Busqueda por sap_number contra /projects/r-crm/contacts.json.
+        //    Es el filtro dedicado que habilitaron para este caso.
         foreach ($sapNumbers as $sap) {
-            $contact = $this->dbContactResolver->buscarContactoEmpresaPorSapNumber($sap);
+            $contact = $this->buscarContactoEmpresaPorSapNumber($sap, $context);
             if ($contact !== null) {
                 return $contact;
             }
         }
 
-        // 2) Fallbacks via HTTP: external_id filter + search por texto.
-        foreach ($sapNumbers as $sap) {
-            $contact = $this->buscarContactoEmpresaPorExternalId($sap, $context);
-            if ($contact !== null) {
-                return $contact;
-            }
-        }
-
+        // 2) Fallback: search por texto matcheando external_id en los resultados.
         foreach ($sapNumbers as $sap) {
             $contact = $this->buscarContactoEmpresaPorQuery($sap, $sap, $context);
             if ($contact !== null) {
@@ -429,6 +421,7 @@ final class RedmineBridge
             }
         }
 
+        // 3) Fallback: search por texto por cuit / razonSocial / nombre.
         foreach ($textQueries as $query) {
             $contact = $this->buscarContactoEmpresaPorQuery($query, null, $context);
             if ($contact !== null) {
@@ -440,21 +433,22 @@ final class RedmineBridge
     }
 
     /**
-     * Usa el filtro ?external_id=X de RedmineUP CRM para localizar el contacto
-     * de la empresa en forma directa. Filtra ademas los resultados matcheando
-     * el external_id exacto.
+     * Busca el contacto de la empresa usando el filtro `sap_number` contra
+     * /projects/r-crm/contacts.json. Retorna el primer contacto con email
+     * utilizable.
      */
-    private function buscarContactoEmpresaPorExternalId(string $externalId, RequestContext $context): ?ContactDTO
+    private function buscarContactoEmpresaPorSapNumber(string $sapNumber, RequestContext $context): ?ContactDTO
     {
         try {
-            $response = $this->clienteService->listarContactos([
-                'external_id' => $externalId,
-                'limit' => 25,
-            ], $context);
+            $response = $this->clienteService->listarContactos(
+                ['sap_number' => $sapNumber, 'limit' => 25],
+                $context,
+                self::CRM_PROJECT_IDENTIFIER,
+            );
         } catch (\Throwable $e) {
-            $this->logger->warning('redmine.bridge.famiq_email.contact_external_id_lookup_failed', [
+            $this->logger->warning('redmine.bridge.famiq_email.sap_number_lookup_failed', [
                 'correlation_id' => $context->correlationId,
-                'external_id' => $externalId,
+                'sap_number' => $sapNumber,
                 'error' => $e->getMessage(),
             ]);
             return null;
@@ -470,21 +464,10 @@ final class RedmineBridge
                 continue;
             }
 
-            $extId = isset($raw['external_id']) ? (string) $raw['external_id'] : '';
-            if ($extId !== $externalId) {
-                continue;
-            }
-
             $dto = $this->buildContactDTOFromRaw($raw);
             if ($dto !== null) {
                 return $dto;
             }
-        }
-
-        // Fallback: si el API ya nos filtro por external_id y solo hay un resultado,
-        // tomamos ese aunque el campo external_id no venga en el payload.
-        if (count($contacts) === 1 && is_array($contacts[0])) {
-            return $this->buildContactDTOFromRaw($contacts[0]);
         }
 
         return null;

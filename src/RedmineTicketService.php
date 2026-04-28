@@ -27,6 +27,9 @@ final class RedmineTicketService
     private const CRM_PROJECT_IDENTIFIER = 'r-crm';
     private const CRM_PROJECT_ROLE_ID = 6;
 
+    /** @var array<int, string> */
+    private array $userMailCache = [];
+
     public function __construct(
         private RedmineHttpClient $client,
         private RedmineConfig $config,
@@ -420,7 +423,9 @@ final class RedmineTicketService
             'include' => 'journals,attachments,relations,watchers',
         ]);
 
-        return $this->client->request('GET', $path, null, [], $context);
+        $response = $this->client->request('GET', $path, null, [], $context);
+
+        return $this->enrichIssueResponseActivityMails($response, $context);
     }
 
     /**
@@ -447,7 +452,9 @@ final class RedmineTicketService
             'key' => $this->requireApiKey(),
         ]);
 
-        return $this->client->request('GET', $path, null, [], $context);
+        $response = $this->client->request('GET', $path, null, [], $context);
+
+        return $this->enrichIssueResponseActivityMails($response, $context);
     }
 
     /**
@@ -459,7 +466,9 @@ final class RedmineTicketService
             'include' => 'journals,attachments',
         ]);
 
-        return $this->client->request('GET', $path, null, [], $context);
+        $response = $this->client->request('GET', $path, null, [], $context);
+
+        return $this->enrichIssueResponseActivityMails($response, $context);
     }
 
     /**
@@ -1060,6 +1069,124 @@ final class RedmineTicketService
         }
 
         return $normalized;
+    }
+
+    /**
+     * @param array<string, mixed> $response
+     * @return array<string, mixed>
+     */
+    private function enrichIssueResponseActivityMails(array $response, RequestContext $context): array
+    {
+        if (isset($response['issue']) && is_array($response['issue'])) {
+            $response['issue'] = $this->enrichIssueActivityMails($response['issue'], $context);
+            return $response;
+        }
+
+        return $this->enrichIssueActivityMails($response, $context);
+    }
+
+    /**
+     * @param array<string, mixed> $issue
+     * @return array<string, mixed>
+     */
+    private function enrichIssueActivityMails(array $issue, RequestContext $context): array
+    {
+        if (isset($issue['author']) && is_array($issue['author'])) {
+            $issue['author'] = $this->enrichUserMail($issue['author'], $context);
+        }
+
+        if (!isset($issue['journals']) || !is_array($issue['journals'])) {
+            return $issue;
+        }
+
+        foreach ($issue['journals'] as $idx => $journal) {
+            if (!is_array($journal)) {
+                continue;
+            }
+
+            if (isset($journal['user']) && is_array($journal['user'])) {
+                $journal['user'] = $this->enrichUserMail($journal['user'], $context);
+            }
+
+            if (isset($journal['author']) && is_array($journal['author'])) {
+                $journal['author'] = $this->enrichUserMail($journal['author'], $context);
+            }
+
+            $issue['journals'][$idx] = $journal;
+        }
+
+        return $issue;
+    }
+
+    /**
+     * @param array<string, mixed> $user
+     * @return array<string, mixed>
+     */
+    private function enrichUserMail(array $user, RequestContext $context): array
+    {
+        $mail = $this->normalizeEmail($user['mail'] ?? $user['email'] ?? null);
+        if ($mail !== null) {
+            $user['mail'] = $mail;
+            return $user;
+        }
+
+        $userId = (int) ($user['id'] ?? 0);
+        if ($userId <= 0) {
+            return $user;
+        }
+
+        $mail = $this->fetchUserMailById($userId, $context);
+        if ($mail !== null) {
+            $user['mail'] = $mail;
+        }
+
+        return $user;
+    }
+
+    private function fetchUserMailById(int $userId, RequestContext $context): ?string
+    {
+        if (array_key_exists($userId, $this->userMailCache)) {
+            return $this->userMailCache[$userId] !== '' ? $this->userMailCache[$userId] : null;
+        }
+
+        try {
+            $adminContext = new RequestContext($context->correlationId);
+            $response = $this->client->request('GET', sprintf('/users/%d.json', $userId), null, [], $adminContext);
+            $user = $response['user'] ?? [];
+            $mail = is_array($user) ? $this->normalizeEmail($user['mail'] ?? $user['email'] ?? null) : null;
+
+            $this->userMailCache[$userId] = $mail ?? '';
+
+            return $mail;
+        } catch (\Throwable $e) {
+            $this->userMailCache[$userId] = '';
+
+            $this->logger->warning('redmine.user_mail.enrich_failed', [
+                'user_id' => $userId,
+                'correlation_id' => $context->correlationId,
+                'message' => $e->getMessage(),
+            ]);
+
+            return null;
+        }
+    }
+
+    private function normalizeEmail(mixed $value): ?string
+    {
+        if (!is_string($value)) {
+            return null;
+        }
+
+        $value = trim($value);
+        if ($value === '') {
+            return null;
+        }
+
+        if (!filter_var($value, FILTER_VALIDATE_EMAIL)) {
+            return null;
+        }
+
+        return mb_strtolower($value);
     }
 
     private function shouldAutoGrantCrmMembership(string $login, RequestContext $context): bool

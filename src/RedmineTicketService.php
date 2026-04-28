@@ -426,6 +426,33 @@ final class RedmineTicketService
     /**
      * @return array<string, mixed>
      */
+    public function consultarIssuesSapPorNumero(int $sapNumber, int $limit, int $offset, RequestContext $context): array
+    {
+        $path = $this->buildPathWithQuery('/api_sap/issues.json', [
+            'key' => $this->requireApiKey(),
+            'sap_number' => $sapNumber,
+            'limit' => $limit,
+            'offset' => $offset,
+        ]);
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerIssueDetalleSap(int $issueId, RequestContext $context): array
+    {
+        $path = $this->buildPathWithQuery(sprintf('/api_sap/issues/%d.json', $issueId), [
+            'key' => $this->requireApiKey(),
+        ]);
+
+        return $this->client->request('GET', $path, null, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     public function obtenerIssueBasico(string|int $issueId, RequestContext $context): array
     {
         $path = $this->buildPathWithQuery(sprintf('/issues/%s.json', $issueId), [
@@ -526,6 +553,14 @@ final class RedmineTicketService
     public function obtenerAttachmentInfo(int $attachmentId, RequestContext $context): array
     {
         return $this->client->request('GET', sprintf('/attachments/%d.json', $attachmentId), null, [], $context);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerHelpdeskTicket(int $ticketId, RequestContext $context): array
+    {
+        return $this->client->request('GET', sprintf('/helpdesk_tickets/%d.json', $ticketId), null, [], $context);
     }
 
     public function descargarContenido(string $url, RequestContext $context): string
@@ -738,6 +773,16 @@ final class RedmineTicketService
         }
 
         return $content;
+    }
+
+    private function requireApiKey(): string
+    {
+        $apiKey = trim((string) $this->config->apiKey);
+        if ($apiKey === '') {
+            throw new \LogicException('Redmine API key is required for SAP API requests');
+        }
+
+        return $apiKey;
     }
 
     /**

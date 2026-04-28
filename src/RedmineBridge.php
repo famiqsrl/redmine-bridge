@@ -188,6 +188,31 @@ final class RedmineBridge
     /**
      * @return array<string, mixed>
      */
+    public function consultarIssuesSapPorNumero(
+        int $sapNumber,
+        int $limit = 100,
+        int $offset = 0,
+        ?RequestContext $context = null,
+    ): array {
+        return $this->ticketService->consultarIssuesSapPorNumero(
+            $sapNumber,
+            $limit,
+            $offset,
+            $this->resolveContext($context),
+        );
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function obtenerIssueDetalleSap(int $issueId, ?RequestContext $context = null): array
+    {
+        return $this->ticketService->obtenerIssueDetalleSap($issueId, $this->resolveContext($context));
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
     public function obtenerIssueBasico(string|int $issueId, ?RequestContext $context = null): array
     {
         return $this->ticketService->obtenerIssueBasico($issueId, $this->resolveContext($context));

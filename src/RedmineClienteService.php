@@ -109,4 +109,15 @@ final class RedmineClienteService
             $context,
         );
     }
+
+    public function buscarOpcionesCustomField(int $customFieldId, RequestContext $context): array
+    {
+        try {
+            $response = $this->client->request('GET', "/custom_fields/$customFieldId.json", null, [], $context);
+
+            return $response['possible_values'];
+        } catch (\Throwable $th) {
+            return [];
+        }
+    }
 }

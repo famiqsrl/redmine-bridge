@@ -388,4 +388,9 @@ final class RedmineBridge
 
         return $items;
     }
+
+    public function buscarOpcionesCustomField(int $customFieldId, ?RequestContext $context = null): array
+    {
+        return $this->clienteService->buscarOpcionesCustomField($customFieldId, $this->resolveContext($context));
+    }
 }

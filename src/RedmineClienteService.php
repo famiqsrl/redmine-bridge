@@ -115,7 +115,7 @@ final class RedmineClienteService
         try {
             $response = $this->client->request('GET', "/custom_fields/$customFieldId.json", null, [], $context);
 
-            return $response['possible_values'];
+            return $response['custom_field']['possible_values'];
         } catch (\Throwable $th) {
             return [];
         }

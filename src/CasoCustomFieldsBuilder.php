@@ -22,10 +22,6 @@ final class CasoCustomFieldsBuilder
     public const CONTACT_CF_CLASE_CLIENTE_ID = 1;
     public const CONTACT_CF_CLASE_CLIENTE_DEFAULT = 'A';
 
-    private const ENUM_FORMA_CONTACTO = [
-        'PIN' => '85',
-    ];
-
     private const ALLOWED_SMALL_IDS = [
         self::CF_FORMA_CONTACTO_ID,
         self::CF_MOTIVO_CONSULTA_ID,
@@ -94,95 +90,30 @@ final class CasoCustomFieldsBuilder
         '25' => 'S54. Solicitar descuento de percepciones sobre una factura',
     ];
 
-
-
-    private const ENUM_MOTIVO_CONSULTA_BY_CODE = [
-        'C10' => '8',
-        'C11' => '9',
-        'C12' => '10',
-        'C20' => '11',
-        'C30' => '12',
-        'C40' => '13',
-        'C41' => '14',
-        'C42' => '15',
-        'C43' => '16',
-        'C45' => '17',
-    ];
-
-    private const ENUM_MOTIVO_RECLAMO_BY_CODE = [
-        'R10' => '22',
-        'R11' => '23',
-        'R12' => '24',
-        'R13' => '25',
-        'R14' => '26',
-        'R15' => '27',
-        'R16' => '28',
-        'R17' => '29',
-        'R18' => '30',
-        'R19' => '31',
-        'R21' => '32',
-        'R22' => '33',
-        'R23' => '34',
-        'R24' => '35',
-        'R25' => '36',
-        'R26' => '37',
-        'R27' => '38',
-        'R28' => '39',
-        'R29' => '40',
-        'R30' => '41',
-        'R31' => '42',
-        'R32' => '43',
-        'R33' => '44',
-        'R34' => '45',
-        'R35' => '46',
-        'R36' => '47',
-        'R37' => '48',
-        'R40' => '49',
-        'R41' => '50',
-        'R42' => '51',
-        'R43' => '52',
-        'R50' => '53',
-        'R60' => '54',
-        'R61' => '55',
-        'R62' => '56',
-        'R63' => '57',
-        'R64' => '58',
-        'R65' => '59',
-        'R67' => '60',
-        'R68' => '61',
-        'R69' => '62',
-        'R70' => '63',
-        'R71' => '64',
-        'R72' => '65',
-        'R80' => '66',
-        'R81' => '67',
-        'R82' => '68',
-        'R90' => '69',
-    ];
-
-    private const ENUM_MOTIVO_SOLICITUD_BY_CODE = [
-        'S10' => '70',
-        'S11' => '71',
-        'S12' => '72',
-        'S20' => '73',
-        'S21' => '74',
-        'S22' => '75',
-        'S30' => '76',
-        'S40' => '77',
-        'S50' => '79',
-        'S51' => '80',
-        'S52' => '81',
-        'S53' => '82',
-        'S54' => '83',
-        'S60' => '84',
-        'S70' => '85',
-        'S72' => '86',
-        'X' => '87',
-        'X10' => '88',
-        'X11' => '89',
-        'X12' => '90',
-        'X13' => '91',
-        'X20' => '92',
+    private const CASO_MOTIVO_LEGIBLE_REDMINE_MAP = [
+        '1'  => 'Quiero consultar el estado de entrega de mi pedido',
+        '2'  => 'Quiero consultar datos de mi pedido',
+        '3'  => 'Quiero solicitar facturas, remitos o certificados de calidad',
+        '4'  => 'Quiero consultar otra información de mi pedido',
+        '5'  => 'Quiero modificar la forma de entrega',
+        '6'  => 'Quiero modificar el lugar de entrega',
+        '7'  => 'Quiero modificar un producto de mi pedido',
+        '8'  => 'Quiero modificar la cantidad de un producto',
+        '9'  => 'Quiero devolver un producto/pedido',
+        '10' => 'Quiero anular un producto/pedido',
+        '11' => 'No recibí mi pedido',
+        '12' => 'Hice un pedido y no lo veo en mi cuenta',
+        '13' => 'Recibí un producto o cantidad equivocada',
+        '14' => 'Recibí un producto deteriorado o con problemas de calidad',
+        '15' => 'Tengo diferencias en mi factura',
+        '16' => 'No veo registrado mi pago',
+        '17' => 'Tengo inconvenientes con un pedido que retiré',
+        '18' => 'Tengo otro problema con mi pedido',
+        '19' => 'Quiero consultar el saldo de mi cuenta',
+        '20' => 'Tengo otra consulta sobre mi estado de cuenta',
+        '21' => 'Quiero actualizar los datos de mi cuenta',
+        '22' => 'Quiero dejar una sugerencia',
+        '23' => 'Otros',
     ];
 
     public function buildForCaso(
@@ -269,6 +200,11 @@ final class CasoCustomFieldsBuilder
         return self::CASO_MOTIVO_REDMINE_MAP[(string) $casoId] ?? null;
     }
 
+    public function obtenerMotivoLegibleRedminePorCaso(int $casoId): ?string
+    {
+        return self::CASO_MOTIVO_LEGIBLE_REDMINE_MAP[(string) $casoId] ?? null;
+    }
+
     public function getContactCfClaseClienteId(): int
     {
         return self::CONTACT_CF_CLASE_CLIENTE_ID;
@@ -289,29 +225,6 @@ final class CasoCustomFieldsBuilder
         };
     }
 
-    private function extractMotivoCode(?string $text): ?string
-    {
-        if (!is_string($text)) {
-            return null;
-        }
-
-        $t = trim($text);
-        if ($t === '') {
-            return null;
-        }
-
-        if (preg_match('/^([A-Z])\s*([0-9]{1,2})?(\.)?/u', $t, $m)) {
-            $letter = $m[1] ?? null;
-            $num = $m[2] ?? '';
-            if (!$letter) {
-                return null;
-            }
-            return $letter . $num;
-        }
-
-        return null;
-    }
-
     private function mapEnumerationValue(int $cfId, mixed $value): mixed
     {
         if ($value === null) {
@@ -327,29 +240,8 @@ final class CasoCustomFieldsBuilder
             if ($t === '' || $t === 'null') {
                 return null;
             }
-            if (preg_match('/^\d+$/', $t)) {
-                return $t;
-            }
 
-            if ($cfId === self::CF_FORMA_CONTACTO_ID) {
-                return self::ENUM_FORMA_CONTACTO[$t] ?? null;
-            }
-
-            if (in_array($cfId, [self::CF_MOTIVO_CONSULTA_ID, self::CF_MOTIVO_RECLAMO_ID, self::CF_MOTIVO_SOLICITUD_ID], true)) {
-                $code = $this->extractMotivoCode($t);
-                if ($code === null) {
-                    return null;
-                }
-
-                return match ($cfId) {
-                    self::CF_MOTIVO_CONSULTA_ID => self::ENUM_MOTIVO_CONSULTA_BY_CODE[$code] ?? null,
-                    self::CF_MOTIVO_RECLAMO_ID => self::ENUM_MOTIVO_RECLAMO_BY_CODE[$code] ?? null,
-                    self::CF_MOTIVO_SOLICITUD_ID => self::ENUM_MOTIVO_SOLICITUD_BY_CODE[$code] ?? null,
-                    default => null,
-                };
-            }
-
-            return $value;
+            return $t;
         }
 
         return $value;
